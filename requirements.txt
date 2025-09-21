@@ -1,0 +1,6 @@
+openai
+elevenlabs
+python-dotenv
+twilio
+flask
+ngrok
