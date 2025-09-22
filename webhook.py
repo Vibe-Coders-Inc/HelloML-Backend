@@ -1,5 +1,5 @@
 from flask import Flask, request
-from twilio.twiml import VoiceResponse
+from twilio.twiml.voice_response import VoiceResponse
 import os
 from dotenv import load_dotenv
 from agent import Agent
