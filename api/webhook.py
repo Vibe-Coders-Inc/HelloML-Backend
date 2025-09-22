@@ -2,6 +2,8 @@ from flask import Flask, request
 from twilio.twiml.voice_response import VoiceResponse
 import os
 from dotenv import load_dotenv
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent import Agent
 
 load_dotenv()
