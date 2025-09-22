@@ -2,7 +2,7 @@
     "version": 2,
     "functions": {
       "webhook.py": {
-        "runtime": "python3.9"
+        "runtime": "python3.13"
       }
     },
     "builds": [
