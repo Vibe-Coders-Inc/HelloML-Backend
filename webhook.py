@@ -117,3 +117,5 @@ def process_speech():
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
+else:
+    app = app # For Vercel Deployment! :D
