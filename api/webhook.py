@@ -53,7 +53,7 @@ def handle_incoming_call():
         # If no speech detected, say goodbye
         response.say(
             "I didn't hear anything. Goodbye!",
-            voice='Polly.Joanna'
+            voice='Polly.Joanna-Neural'
         )
         response.hangup()
         
@@ -62,7 +62,7 @@ def handle_incoming_call():
     except Exception as e:
         print(f"Error in handle_incoming_call: {e}")
         response = VoiceResponse()
-        response.say("Sorry, there was an error. Please try again later.", voice='Polly.Joanna')
+        response.say("Sorry, there was an error. Please try again later.", voice='Polly.Joanna-Neural')
         response.hangup()
         return str(response)
 
