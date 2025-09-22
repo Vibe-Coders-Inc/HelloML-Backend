@@ -1,5 +1,10 @@
 {
     "version": 2,
+    "functions": {
+      "webhook.py": {
+        "runtime": "python3.9"
+      }
+    },
     "builds": [
       {
         "src": "webhook.py",
@@ -12,4 +17,4 @@
         "dest": "webhook.py"
       }
     ]
-}
+  }
