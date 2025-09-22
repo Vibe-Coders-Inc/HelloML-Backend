@@ -14,7 +14,7 @@ conversation_history = {}
 @app.route("/", methods=['GET'])
 def index():
     """Health check endpoint"""
-    return "Voice Bot API is running", 200
+    return "Voice Bot API is running! This endpoint accepts POST requests from Twilio. Call your Twilio phone number to interact with the bot.", 200
 
 @app.route("/voice", methods=['POST'])
 def handle_incoming_call():

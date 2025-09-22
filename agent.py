@@ -12,39 +12,28 @@ class Agent:
 
     def generate_response(self, prompt):
         """Generate a response from the OpenAI client"""
-        response = self.client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a helpful AI assistant on a phone call. Keep responses concise and natural."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=150
+        response = self.client.responses.create(
+            model="gpt-5-nano",
+            input=prompt,
+            store=True
         )
-        return response.choices[0].message.content
+        return response.output_text
 
     def generate_conversation_response(self, user_input, conversation_history=None):
         """Generate a conversational response with context"""
-        messages = [
-            {"role": "system", "content": "You are a helpful AI assistant in a phone conversation. Keep responses concise and natural."}
-        ]
-        
         if conversation_history:
-            # Add conversation history to messages
-            for exchange in conversation_history[-6:]:  # Last 6 exchanges
-                if exchange.startswith("User: "):
-                    messages.append({"role": "user", "content": exchange[6:]})
-                elif exchange.startswith("Assistant: "):
-                    messages.append({"role": "assistant", "content": exchange[11:]})
+            # Build context from conversation history
+            context = "\n".join(conversation_history)
+            full_prompt = f"Previous conversation:\n{context}\n\nUser: {user_input}\nAssistant:"
+        else:
+            full_prompt = f"User: {user_input}\nAssistant:"
         
-        # Add current user input
-        messages.append({"role": "user", "content": user_input})
-        
-        response = self.client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            max_tokens=150
+        response = self.client.responses.create(
+            model="gpt-5-nano",
+            input=full_prompt,
+            store=True
         )
-        return response.choices[0].message.content
+        return response.output_text
 
     def get_greeting(self):
         """Get a greeting message"""
