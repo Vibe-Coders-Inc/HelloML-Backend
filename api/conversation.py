@@ -1,4 +1,5 @@
-from flask import Flask, request
+from fastapi import FastAPI, Request
+from fastapi.responses import Response
 from twilio.twiml.voice_response import VoiceResponse
 import os
 import sys
@@ -6,19 +7,19 @@ import sys
 # Add parent directory to path to import agent
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-app = Flask(__name__)
+app = FastAPI(title="AI Conversation API")
 
 # Store conversation history
 conversation_history = {}
 
-@app.route("/", methods=['GET'])
+@app.get("/")
 def index():
     """Health check endpoint"""
-    return "Voice Bot API is running!", 200
+    return "AI Conversation API is running!"
 
-@app.route("/voice", methods=['POST'])
-def handle_incoming_call():
-    """Handle incoming calls"""
+@app.post('/conversation/{business_id}/voice')
+async def handle_incoming_call(business_id: int, request: Request):
+    """Handle incoming voice calls for AI conversation"""
     try:
         # Lazy import to avoid initialization issues
         from agent import Agent
@@ -26,8 +27,11 @@ def handle_incoming_call():
         
         response = VoiceResponse()
         
+        # Get form data from request
+        form_data = await request.form()
+        
         # Get caller's phone number for conversation tracking
-        caller_number = request.form.get('From', 'unknown')
+        caller_number = form_data.get('From', 'unknown')
         
         # Initialize conversation history for this caller
         if caller_number not in conversation_history:
@@ -44,7 +48,7 @@ def handle_incoming_call():
         # Gather speech input
         gather = response.gather(
             input='speech',
-            action='/process_speech',
+            action=f'/conversation/{business_id}/process',
             method='POST',
             speech_timeout='auto',
             timeout=10
@@ -57,18 +61,18 @@ def handle_incoming_call():
         )
         response.hangup()
         
-        return str(response)
+        return Response(content=str(response), media_type="application/xml")
         
     except Exception as e:
         print(f"Error in handle_incoming_call: {e}")
         response = VoiceResponse()
         response.say("Sorry, there was an error. Please try again later.", voice='Polly.Joanna')
         response.hangup()
-        return str(response)
+        return Response(content=str(response), media_type="application/xml")
 
-@app.route('/process_speech', methods=['POST'])
-def process_speech():
-    """Process the speech input from the user"""
+@app.post('/conversation/{business_id}/process')
+async def process_speech(business_id: int, request: Request):
+    """Process speech input and generate AI response"""
     try:
         # Lazy import to avoid initialization issues
         from agent import Agent
@@ -76,11 +80,14 @@ def process_speech():
         
         response = VoiceResponse()
         
+        # Get form data from request
+        form_data = await request.form()
+        
         # Get caller's phone number
-        caller_number = request.form.get('From', 'unknown')
+        caller_number = form_data.get('From', 'unknown')
         
         # Get the transcribed text from Twilio
-        user_speech = request.form.get('SpeechResult', '')
+        user_speech = form_data.get('SpeechResult', '')
         
         if user_speech:
             # Add user input to conversation history
@@ -105,7 +112,7 @@ def process_speech():
             # Continue gathering speech
             gather = response.gather(
                 input='speech',
-                action='/process_speech',
+                action=f'/conversation/{business_id}/process',
                 method='POST',
                 speech_timeout='auto',
                 timeout=10
@@ -128,20 +135,21 @@ def process_speech():
             # Try again
             gather = response.gather(
                 input='speech',
-                action='/process_speech',
+                action=f'/conversation/{business_id}/process',
                 method='POST',
                 speech_timeout='auto',
                 timeout=10
             )
         
-        return str(response)
+        return Response(content=str(response), media_type="application/xml")
         
     except Exception as e:
         print(f"Error in process_speech: {e}")
         response = VoiceResponse()
         response.say("Sorry, there was an error processing your request.", voice='Polly.Joanna')
         response.hangup()
-        return str(response)
+        return Response(content=str(response), media_type="application/xml")
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=5000)
