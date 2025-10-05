@@ -2,15 +2,17 @@ from fastapi import FastAPI, HTTPException
 from twilio.rest import Client
 from pydantic import BaseModel
 import os
+from database import supabase
 
 app = FastAPI(title="Phone Number Provisioning API")
 
-# Pydantic models for requests
-class PhoneNumberRequest(BaseModel):
-    twilio_account_sid: str
-    twilio_auth_token: str
-    area_code: str = "415"
-    webhook_url: str
+# Master Twilio Credentials
+TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+
+class ProvisionRequest(BaseModel):
+    agent_id: str
+    area_code: str
 
 @app.get("/")
 def index():
@@ -18,40 +20,58 @@ def index():
     return "Phone Number Provisioning API is running!"
 
 @app.post("/provision-phone-number")
-async def provision_phone_number(request_data: PhoneNumberRequest):
-    """Provision a new phone number"""
+async def provision_phone_number(request: ProvisionRequest):
+    """Provision a phone number with the Twilio account"""
     try:
-        # Initialize Twilio client
-        client = Client(request_data.twilio_account_sid, request_data.twilio_auth_token)
+        db = supabase()
         
-        # Search for available numbers
+        # Check if agent exists and doesn't already have a phone
+        agent = db.table('agents').select('*').eq('id', request.agent_id).single().execute()
+        if not agent.data:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        
+        existing_phone = db.table('phone_numbers').select('*').eq('agent_id', request.agent_id).execute()
+        if existing_phone.data:
+            raise HTTPException(status_code=400, detail="Agent already has a phone number")
+        
+        # Provision number with Master Twilio
+        client = Client(TWILIO_SID, TWILIO_TOKEN)
+        
         available = client.available_phone_numbers('US').local.list(
-            area_code=request_data.area_code,
+            area_code=request.area_code,
             limit=1
         )
         
         if not available:
-            raise HTTPException(status_code=400, detail=f"No numbers available in area code {request_data.area_code}")
+            raise HTTPException(status_code=400, detail=f"No numbers available in area code {request.area_code}")
         
-        # Purchase the number with webhook
+        webhook_url = f"https://helloml.app/conversation/{request.agent_id}/voice"
+        
         number = client.incoming_phone_numbers.create(
             phone_number=available[0].phone_number,
-            voice_url=request_data.webhook_url,
+            voice_url=webhook_url,
             voice_method='POST'
         )
         
+        # Save to database
+        phone_data = db.table('phone_numbers').insert({
+            'agent_id': request.agent_id,
+            'phone_number': number.phone_number,
+            'twilio_sid': number.sid,
+            'area_code': request.area_code,
+            'webhook_url': webhook_url,
+            'status': 'active'
+        }).execute()
+        
         return {
+            "success": True,
             "phone_number": number.phone_number,
-            "webhook_url": request_data.webhook_url,
-            "status": "active",
-            "message": f"Phone number {number.phone_number} provisioned successfully"
+            "agent_id": request.agent_id,
+            "webhook_url": webhook_url
         }
         
     except Exception as e:
-        if "Twilio" in str(e):
-            raise HTTPException(status_code=400, detail=f"Twilio error: {str(e)}")
-        else:
-            raise HTTPException(status_code=500, detail=f"Error provisioning number: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
