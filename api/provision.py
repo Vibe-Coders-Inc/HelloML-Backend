@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from twilio.rest import Client
 from pydantic import BaseModel
 import os
-from database import supabase
+from .database import supabase
 
 app = FastAPI(title="Phone Number Provisioning API")
 

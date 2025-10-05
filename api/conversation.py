@@ -3,7 +3,7 @@ from fastapi.responses import Response
 from twilio.twiml.voice_response import VoiceResponse
 import os
 import sys
-from database import supabase
+from .database import supabase
 
 # Add parent directory to path to import agent
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
