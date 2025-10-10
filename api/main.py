@@ -203,15 +203,24 @@ async def process_speech(agent_id: int, request: Request):
         # Generate AI response with agent config
         from voice_agent import VoiceAgent
         agent = VoiceAgent(map_agent_config(agent_config))
+        
+        # Format conversation history for VoiceAgent
+        formatted_history = []
+        for m in history.data:
+            if m['role'] == 'user':
+                formatted_history.append(f"User: {m['content']}")
+            elif m['role'] == 'agent':
+                formatted_history.append(f"Assistant: {m['content']}")
+        
         ai_response = agent.generate_conversation_response(
             user_speech,
-            [f"{m['role']}: {m['content']}" for m in history.data]
+            formatted_history
         )
         
         # Save AI message
         db.table('message').insert({
             'conversation_id': conversation_id,
-            'role': 'assistant',
+            'role': 'agent',
             'content': ai_response
         }).execute()
         
