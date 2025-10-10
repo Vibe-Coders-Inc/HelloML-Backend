@@ -26,28 +26,21 @@ class VoiceAgent:
         """Generate AI response with conversation context and system prompt"""
         try:
             # Build conversation context
-            messages = [{"role": "system", "content": self.system_prompt}]
+            context = self.system_prompt + "\n\n"
             
             if conversation_history:
-                # Convert conversation history to message format
-                for exchange in conversation_history[-10:]:  # Keep last 10 exchanges
-                    if exchange.startswith("User: "):
-                        messages.append({"role": "user", "content": exchange[6:]})
-                    elif exchange.startswith("Assistant: "):
-                        messages.append({"role": "assistant", "content": exchange[11:]})
+                context += "\n".join(conversation_history[-10:]) + "\n\n"
             
-            # Add current user input
-            messages.append({"role": "user", "content": user_input})
+            context += f"User: {user_input}\nAssistant:"
             
-            # Generate response using modern chat completions API
-            response = self.client.chat.completions.create(
+            # Generate response using responses API for gpt-5-nano
+            response = self.client.responses.create(
                 model=self.model,
-                messages=messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens
+                input=context,
+                store=True
             )
             
-            return response.choices[0].message.content.strip()
+            return response.output_text.strip()
             
         except Exception as e:
             print(f"Error generating response: {e}")
