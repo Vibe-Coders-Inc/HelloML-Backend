@@ -181,24 +181,17 @@ async def process_speech(agent_id: int, request: Request):
             )
             return Response(content=str(response), media_type="application/xml")
         
-        # Save user message
-        db.table('message').insert({
-            'conversation_id': conversation_id,
-            'role': 'user',
-            'content': user_speech
-        }).execute()
+        # Get agent config first (will be cached soon)
+        agent_data = db.table('agent').select('*').eq('id', agent_id).single().execute()
+        agent_config = agent_data.data
         
-        # Get conversation history
+        # Get conversation history (only last 5 messages for speed)
         history = db.table('message')\
             .select('role, content')\
             .eq('conversation_id', conversation_id)\
             .order('created_at')\
-            .limit(10)\
+            .limit(5)\
             .execute()
-        
-        # Get agent config for AI response
-        agent_data = db.table('agent').select('*').eq('id', agent_id).single().execute()
-        agent_config = agent_data.data
         
         # Generate AI response with agent config
         from voice_agent import VoiceAgent
@@ -217,12 +210,19 @@ async def process_speech(agent_id: int, request: Request):
             formatted_history
         )
         
-        # Save AI message
-        db.table('message').insert({
-            'conversation_id': conversation_id,
-            'role': 'agent',
-            'content': ai_response
-        }).execute()
+        # Save both messages (user + agent) after AI generation
+        db.table('message').insert([
+            {
+                'conversation_id': conversation_id,
+                'role': 'user',
+                'content': user_speech
+            },
+            {
+                'conversation_id': conversation_id,
+                'role': 'agent',
+                'content': ai_response
+            }
+        ]).execute()
         
         # Get voice config from agent
         voice_config = agent.get_voice_config()

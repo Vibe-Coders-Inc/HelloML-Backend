@@ -3,7 +3,7 @@ from typing import List, Optional, Dict, Any
 from openai import OpenAI
 
 class VoiceAgent:
-    """Modern AI voice agent for Twilio phone calls with configurable behavior"""
+    """AI voice agent for Twilio phone calls with configurable behavior"""
     
     def __init__(self, agent_config: Optional[Dict[str, Any]] = None):
         """Initialize the VoiceAgent with optional configuration"""
