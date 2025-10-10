@@ -26,7 +26,7 @@ class VoiceAgent:
         """Generate AI response with conversation context and system prompt"""
         try:
             # Build conversation context
-            context = self.system_prompt + "\n\n"
+            context = (self.system_prompt or "You are a helpful AI assistant.") + "\n\n"
             
             if conversation_history:
                 context += "\n".join(conversation_history[-10:]) + "\n\n"
