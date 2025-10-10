@@ -70,7 +70,7 @@ async def provision_phone_number(request: ProvisionRequest):
         )
         
         # Save to database
-        phone_data = db.table('phone_numbers').insert({
+        phone_data = db.table('phone_number').insert({
             'agent_id': request.agent_id,
             'phone_number': number.phone_number,
             'area_code': request.area_code,
