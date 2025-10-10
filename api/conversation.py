@@ -5,19 +5,22 @@ import os
 import sys
 from .database import supabase
 
-# Add parent directory to path to import agent
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-app = FastAPI(title="AI Conversation API")
+app = FastAPI(
+    title="Conversation API",
+    description="Handles voice calls and processes speech for AI agents",
+    version="1.0.0"
+)
 
-@app.get("/")
+@app.get("/", summary="Check API status")
 def index():
-    """Health check endpoint"""
+    """Returns API status"""
     return "AI Conversation API is running!"
 
-@app.post('/conversation/{agent_id}/voice')
+@app.post('/conversation/{agent_id}/voice', summary="Handle incoming call")
 async def handle_incoming_call(agent_id: str, request: Request):
-    """Handle incoming voice calls"""
+    """Receives incoming call and starts conversation"""
     try:
         db = supabase()
         form_data = await request.form()
@@ -72,9 +75,9 @@ async def handle_incoming_call(agent_id: str, request: Request):
         response.hangup()
         return Response(content=str(response), media_type="application/xml")
 
-@app.post('/conversation/{agent_id}/process')
+@app.post('/conversation/{agent_id}/process', summary="Process speech input")
 async def process_speech(agent_id: str, request: Request):
-    """Process speech and generate AI response with RAG"""
+    """Converts speech to text and generates AI response"""
     try:
         db = supabase()
         form_data = await request.form()

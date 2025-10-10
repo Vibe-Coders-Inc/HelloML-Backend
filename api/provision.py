@@ -4,24 +4,35 @@ from pydantic import BaseModel
 import os
 from .database import supabase
 
-app = FastAPI(title="Phone Number Provisioning API")
+app = FastAPI(
+    title="Phone Provisioning API",
+    description="Provisions phone numbers for agents",
+    version="1.0.0"
+)
 
-# Master Twilio Credentials
 TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 
 class ProvisionRequest(BaseModel):
     agent_id: str
     area_code: str
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "agent_id": "123e4567-e89b-12d3-a456-426614174000",
+                "area_code": "415"
+            }
+        }
 
-@app.get("/")
+@app.get("/", summary="Check API status")
 def index():
-    """Health check endpoint"""
+    """Returns API status"""
     return "Phone Number Provisioning API is running!"
 
-@app.post("/provision-phone-number")
+@app.post("/provision-phone-number", summary="Provision phone number")
 async def provision_phone_number(request: ProvisionRequest):
-    """Provision a phone number with the Twilio account"""
+    """Buys a phone number and assigns it to an agent"""
     try:
         db = supabase()
         
