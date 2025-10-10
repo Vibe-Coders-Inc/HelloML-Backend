@@ -14,10 +14,8 @@ class VoiceAgent:
         self.client = OpenAI(api_key=api_key)
         self.config = agent_config or {}
         
-        # Default configuration
+        # Configuration
         self.model = self.config.get('model', 'gpt-5-nano')
-        self.temperature = self.config.get('temperature', 0.7)
-        self.max_tokens = self.config.get('max_tokens', 150)
         self.system_prompt = self.config.get('system_prompt', 'You are a helpful AI assistant.')
         self.voice = self.config.get('voice', 'Polly.Joanna')
         self.language = self.config.get('language', 'en-US')
@@ -29,7 +27,7 @@ class VoiceAgent:
             context = (self.system_prompt or "You are a helpful AI assistant.") + "\n\n"
             
             if conversation_history:
-                context += "\n".join(conversation_history[-10:]) + "\n\n"
+                context += "\n".join(conversation_history) + "\n\n"
             
             context += f"User: {user_input}\nAssistant:"
             
@@ -51,10 +49,6 @@ class VoiceAgent:
     def get_greeting(self) -> str:
         """Get personalized greeting from agent config"""
         return self.config.get('greeting', "Hello! How can I help you today?")
-
-    def get_goodbye(self) -> str:
-        """Get personalized goodbye from agent config"""
-        return self.config.get('goodbye', "Thank you for calling! Have a great day!")
 
     def get_voice_config(self) -> Dict[str, str]:
         """Get voice configuration for Twilio"""

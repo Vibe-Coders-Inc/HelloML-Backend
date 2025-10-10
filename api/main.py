@@ -6,6 +6,7 @@ from pydantic import BaseModel
 import os
 import sys
 from .database import supabase
+from voice_agent import VoiceAgent
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -14,9 +15,6 @@ app = FastAPI(
     description="Provisions phone numbers for agents and handles voice calls",
     version="1.0.0"
 )
-
-TWILIO_SID = os.getenv("ACCOUNT_SID")
-TWILIO_TOKEN = os.getenv("AUTH_TOKEN")
 
 def map_agent_config(db_config):
     """Map database agent config to VoiceAgent format"""
@@ -62,8 +60,8 @@ async def provision_phone_number(request: ProvisionRequest):
         if existing_phone.data:
             raise HTTPException(status_code=400, detail="Agent already has a phone number")
         
-        # Provision number with Master Twilio
-        client = Client(TWILIO_SID, TWILIO_TOKEN)
+        # Provision number with Twilio
+        client = Client(os.getenv("ACCOUNT_SID"), os.getenv("AUTH_TOKEN"))
         
         available = client.available_phone_numbers('US').local.list(
             area_code=request.area_code,
@@ -82,7 +80,7 @@ async def provision_phone_number(request: ProvisionRequest):
         )
         
         # Save to database
-        phone_data = db.table('phone_number').insert({
+        db.table('phone_number').insert({
             'agent_id': request.agent_id,
             'phone_number': number.phone_number,
             'country': 'US',
@@ -109,7 +107,6 @@ async def handle_incoming_call(agent_id: int, request: Request):
         form_data = await request.form()
         
         caller_phone = form_data.get('From', 'unknown')
-        call_sid = form_data.get('CallSid')
         
         # Get agent config from database
         agent_data = db.table('agent').select('*').eq('id', agent_id).single().execute()
@@ -128,7 +125,6 @@ async def handle_incoming_call(agent_id: int, request: Request):
         conversation_id = conversation.data[0]['id']
         
         # Build response with agent config
-        from voice_agent import VoiceAgent
         agent = VoiceAgent(map_agent_config(config))
         
         response = VoiceResponse()
@@ -167,7 +163,6 @@ async def process_speech(agent_id: int, request: Request):
         
         conversation_id = request.query_params.get('conversation_id')
         user_speech = form_data.get('SpeechResult', '')
-        confidence = form_data.get('Confidence', 0)
         
         if not user_speech:
             response = VoiceResponse()
@@ -181,11 +176,11 @@ async def process_speech(agent_id: int, request: Request):
             )
             return Response(content=str(response), media_type="application/xml")
         
-        # Get agent config first (will be cached soon)
+        # Get agent config and conversation history
         agent_data = db.table('agent').select('*').eq('id', agent_id).single().execute()
         agent_config = agent_data.data
         
-        # Get conversation history (only last 5 messages for speed)
+
         history = db.table('message')\
             .select('role, content')\
             .eq('conversation_id', conversation_id)\
@@ -194,7 +189,6 @@ async def process_speech(agent_id: int, request: Request):
             .execute()
         
         # Generate AI response with agent config
-        from voice_agent import VoiceAgent
         agent = VoiceAgent(map_agent_config(agent_config))
         
         # Format conversation history for VoiceAgent
