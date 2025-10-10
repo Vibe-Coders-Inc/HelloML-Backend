@@ -15,8 +15,8 @@ app = FastAPI(
     version="1.0.0"
 )
 
-TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_SID = os.getenv("ACCOUNT_SID")
+TWILIO_TOKEN = os.getenv("AUTH_TOKEN")
 
 class ProvisionRequest(BaseModel):
     agent_id: int
