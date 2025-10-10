@@ -18,6 +18,18 @@ app = FastAPI(
 TWILIO_SID = os.getenv("ACCOUNT_SID")
 TWILIO_TOKEN = os.getenv("AUTH_TOKEN")
 
+def map_agent_config(db_config):
+    """Map database agent config to VoiceAgent format"""
+    return {
+        'model': db_config.get('model_type', 'gpt-5-nano'),
+        'temperature': float(db_config.get('temperature', 0.7)),
+        'voice': f"Polly.{db_config.get('voice_model', 'Joanna')}",
+        'language': 'en-US',
+        'system_prompt': db_config.get('prompt', 'You are a helpful AI assistant.'),
+        'greeting': db_config.get('greeting', 'Hello! How can I help you?'),
+        'goodbye': db_config.get('goodbye', 'Goodbye!')
+    }
+
 class ProvisionRequest(BaseModel):
     agent_id: int
     area_code: str
@@ -117,7 +129,7 @@ async def handle_incoming_call(agent_id: int, request: Request):
         
         # Build response with agent config
         from voice_agent import VoiceAgent
-        agent = VoiceAgent(config)
+        agent = VoiceAgent(map_agent_config(config))
         
         response = VoiceResponse()
         greeting = agent.get_greeting()
@@ -190,7 +202,7 @@ async def process_speech(agent_id: int, request: Request):
         
         # Generate AI response with agent config
         from voice_agent import VoiceAgent
-        agent = VoiceAgent(agent_config)
+        agent = VoiceAgent(map_agent_config(agent_config))
         ai_response = agent.generate_conversation_response(
             user_speech,
             [f"{m['role']}: {m['content']}" for m in history.data]
