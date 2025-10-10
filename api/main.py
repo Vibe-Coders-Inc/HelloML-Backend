@@ -61,7 +61,7 @@ async def provision_phone_number(request: ProvisionRequest):
         if not available:
             raise HTTPException(status_code=400, detail=f"No numbers available in area code {request.area_code}")
         
-        webhook_url = f"https://helloml.app/conversation/{request.agent_id}/voice"
+        webhook_url = f"https://www.helloml.app/conversation/{request.agent_id}/voice"
         
         number = client.incoming_phone_numbers.create(
             phone_number=available[0].phone_number,
@@ -185,7 +185,7 @@ async def process_speech(agent_id: int, request: Request):
             .execute()
         
         # Get agent config for AI response
-        agent_data = db.table('agents').select('*').eq('id', agent_id).single().execute()
+        agent_data = db.table('agent').select('*').eq('id', agent_id).single().execute()
         agent_config = agent_data.data
         
         # Generate AI response with agent config
