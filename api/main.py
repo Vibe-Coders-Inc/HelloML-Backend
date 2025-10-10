@@ -19,13 +19,13 @@ TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 
 class ProvisionRequest(BaseModel):
-    agent_id: str
+    agent_id: int
     area_code: str
     
     class Config:
         json_schema_extra = {
             "example": {
-                "agent_id": "123e4567-e89b-12d3-a456-426614174000",
+                "agent_id": 3,
                 "area_code": "415"
             }
         }
@@ -89,7 +89,7 @@ async def provision_phone_number(request: ProvisionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post('/conversation/{agent_id}/voice', summary="Handle incoming call")
-async def handle_incoming_call(agent_id: str, request: Request):
+async def handle_incoming_call(agent_id: int, request: Request):
     """Receives incoming call and starts conversation"""
     try:
         db = supabase()
@@ -146,7 +146,7 @@ async def handle_incoming_call(agent_id: str, request: Request):
         return Response(content=str(response), media_type="application/xml")
 
 @app.post('/conversation/{agent_id}/process', summary="Process speech input")
-async def process_speech(agent_id: str, request: Request):
+async def process_speech(agent_id: int, request: Request):
     """Converts speech to text and generates AI response"""
     try:
         db = supabase()
