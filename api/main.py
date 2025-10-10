@@ -73,6 +73,7 @@ async def provision_phone_number(request: ProvisionRequest):
         phone_data = db.table('phone_number').insert({
             'agent_id': request.agent_id,
             'phone_number': number.phone_number,
+            'country': 'US',
             'area_code': request.area_code,
             'webhook_url': webhook_url,
             'status': 'active'
