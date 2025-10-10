@@ -43,16 +43,18 @@ class VoiceAgent:
             return response.output_text.strip()
             
         except Exception as e:
-            print(f"Error generating response: {e}")
+            print(f"Error generating response: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return "I apologize, but I'm having trouble processing your request right now. Please try again."
 
     def get_greeting(self) -> str:
         """Get personalized greeting from agent config"""
-        return self.config.get('greeting_message', "Hello! How can I help you today?")
+        return self.config.get('greeting', "Hello! How can I help you today?")
 
     def get_goodbye(self) -> str:
         """Get personalized goodbye from agent config"""
-        return self.config.get('goodbye_message', "Thank you for calling! Have a great day!")
+        return self.config.get('goodbye', "Thank you for calling! Have a great day!")
 
     def get_voice_config(self) -> Dict[str, str]:
         """Get voice configuration for Twilio"""
