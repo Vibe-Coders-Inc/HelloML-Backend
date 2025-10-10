@@ -26,11 +26,11 @@ async def provision_phone_number(request: ProvisionRequest):
         db = supabase()
         
         # Check if agent exists and doesn't already have a phone
-        agent = db.table('agents').select('*').eq('id', request.agent_id).single().execute()
+        agent = db.table('agent').select('*').eq('id', request.agent_id).single().execute()
         if not agent.data:
             raise HTTPException(status_code=404, detail="Agent not found")
         
-        existing_phone = db.table('phone_numbers').select('*').eq('agent_id', request.agent_id).execute()
+        existing_phone = db.table('phone_number').select('*').eq('agent_id', request.agent_id).execute()
         if existing_phone.data:
             raise HTTPException(status_code=400, detail="Agent already has a phone number")
         
@@ -57,7 +57,6 @@ async def provision_phone_number(request: ProvisionRequest):
         phone_data = db.table('phone_numbers').insert({
             'agent_id': request.agent_id,
             'phone_number': number.phone_number,
-            'twilio_sid': number.sid,
             'area_code': request.area_code,
             'webhook_url': webhook_url,
             'status': 'active'

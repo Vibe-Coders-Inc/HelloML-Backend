@@ -26,17 +26,16 @@ async def handle_incoming_call(agent_id: str, request: Request):
         call_sid = form_data.get('CallSid')
         
         # Get agent config from database
-        agent_data = db.table('agents').select('*').eq('id', agent_id).single().execute()
+        agent_data = db.table('agent').select('*').eq('id', agent_id).single().execute()
         if not agent_data.data:
             raise Exception("Agent not found")
         
         config = agent_data.data
         
         # Create conversation record
-        conversation = db.table('conversations').insert({
+        conversation = db.table('conversation').insert({
             'agent_id': agent_id,
             'caller_phone': caller_phone,
-            'twilio_call_sid': call_sid,
             'status': 'in_progress'
         }).execute()
         
@@ -97,15 +96,14 @@ async def process_speech(agent_id: str, request: Request):
             return Response(content=str(response), media_type="application/xml")
         
         # Save user message
-        db.table('messages').insert({
+        db.table('message').insert({
             'conversation_id': conversation_id,
             'role': 'user',
-            'content': user_speech,
-            'speech_confidence': float(confidence)
+            'content': user_speech
         }).execute()
         
         # Get conversation history
-        history = db.table('messages')\
+        history = db.table('message')\
             .select('role, content')\
             .eq('conversation_id', conversation_id)\
             .order('created_at')\
@@ -125,7 +123,7 @@ async def process_speech(agent_id: str, request: Request):
         )
         
         # Save AI message
-        db.table('messages').insert({
+        db.table('message').insert({
             'conversation_id': conversation_id,
             'role': 'assistant',
             'content': ai_response
