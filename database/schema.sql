@@ -14,9 +14,9 @@ CREATE TABLE IF NOT EXISTS public.business (
   name TEXT NOT NULL,
   phone_number TEXT, -- actual business phone number for human fallback
   business_email TEXT, -- for emailing business, not the business owner 
-  address TEXT NOT NULL,
+  address TEXT NOT NULL DEFAULT 'main_location', -- if you have business with same name, address must differ!
   created_at timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT ux_business_owner_name UNIQUE (owner_user_id, name)
+  CONSTRAINT ux_business_owner_name_address UNIQUE (owner_user_id, name, address)
 );
 
 -- ========== agent ==========
@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS public.document (
 );
 
 CREATE INDEX IF NOT EXISTS ix_document_agent_id  ON public.document(agent_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_document_agent_filename ON public.document(agent_id, filename);
 CREATE INDEX IF NOT EXISTS ix_document_uploaded_at  ON public.document(uploaded_at);
 
 -- ========== document_chunk ==========
@@ -100,11 +101,11 @@ CREATE INDEX IF NOT EXISTS ix_conversation_status   ON public.conversation(statu
 
 -- ========== message ==========
 CREATE TABLE public.message (
-  id               SERIAL PRIMARY KEY,
-  conversation_id  INT NOT NULL REFERENCES public.conversation(id) ON DELETE CASCADE,
-  role             TEXT NOT NULL CHECK (role IN ('user','agent','system')),   -- who spoke
-  content          TEXT NOT NULL,
-  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+  id SERIAL PRIMARY KEY,
+  conversation_id INT NOT NULL REFERENCES public.conversation(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('user','agent','system')),   -- who spoke
+  content TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS ix_message_conversation ON public.message(conversation_id);
