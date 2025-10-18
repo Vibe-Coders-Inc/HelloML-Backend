@@ -1,12 +1,12 @@
+# voice_agent.py
+
 import os
 from typing import List, Optional, Dict, Any
 from openai import OpenAI
 
-class VoiceAgent:
-    """AI voice agent for Twilio phone calls with configurable behavior"""
-    
+class VoiceAgent:    
     def __init__(self, agent_config: Optional[Dict[str, Any]] = None):
-        """Initialize the VoiceAgent with optional configuration"""
+        """Initialize the VoiceAgent"""
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OPENAI_API_KEY not found in environment variables")
@@ -31,7 +31,7 @@ class VoiceAgent:
             
             context += f"User: {user_input}\nAssistant:"
             
-            # Generate response using responses API for gpt-5-nano
+            # Generate response using responses API
             response = self.client.responses.create(
                 model=self.model,
                 input=context,
@@ -47,7 +47,7 @@ class VoiceAgent:
             return "I apologize, but I'm having trouble processing your request right now. Please try again."
 
     def get_greeting(self) -> str:
-        """Get personalized greeting from agent config"""
+        """Get greeting from agent config"""
         return self.config.get('greeting', "Hello! How can I help you today?")
 
     def get_voice_config(self) -> Dict[str, str]:
