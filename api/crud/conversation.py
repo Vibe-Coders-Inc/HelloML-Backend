@@ -1,10 +1,14 @@
 # api/crud/conversation.py
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from typing import Optional
 from ..database import supabase
 
 router = APIRouter(prefix="/conversation", tags=["Conversation"])
+
+class ConversationEnd(BaseModel):
+    status: str = "completed"
 
 @router.get("/{conversation_id}", summary="Get conversation details")
 async def get_conversation(conversation_id: int, include_messages: bool = False):
@@ -140,13 +144,12 @@ async def get_messages(conversation_id: int):
 
 
 @router.put("/{conversation_id}/end", summary="End conversation")
-async def end_conversation(conversation_id: int, request: Request):
+async def end_conversation(conversation_id: int, data: ConversationEnd):
     """Marks conversation as completed or failed"""
     try:
         db = supabase()
-        data = await request.json()
         
-        status = data.get('status', 'completed')
+        status = data.status
         
         if status not in ['completed', 'failed', 'cancelled']:
             raise HTTPException(status_code=400, detail="Invalid status")
