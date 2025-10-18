@@ -1,3 +1,6 @@
+-- For Simplicity I have disabled these policies --> These will be enabled with time and functionality will be supported
+
+
 -- ========== Enable RLS ==========
 ALTER TABLE public.business         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.agent            ENABLE ROW LEVEL SECURITY;
