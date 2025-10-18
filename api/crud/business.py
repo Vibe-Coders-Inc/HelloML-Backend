@@ -1,24 +1,38 @@
 # api/crud/business.py
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from typing import Optional
 from ..database import supabase
 
 router = APIRouter(prefix="/business", tags=["Business"])
 
+class BusinessCreate(BaseModel):
+    owner_user_id: str
+    name: str
+    address: str
+    phone_number: Optional[str] = None
+    business_email: Optional[str] = None
+
+class BusinessUpdate(BaseModel):
+    name: Optional[str] = None
+    address: Optional[str] = None
+    phone_number: Optional[str] = None
+    business_email: Optional[str] = None
+
 @router.post("", summary="Create business")
-async def create_business(request: Request):
+async def create_business(business: BusinessCreate):
     """Creates a new business"""
     try:
         db = supabase()
-        data = await request.json()
         
         # Insert business
         result = db.table('business').insert({
-            'owner_user_id': data['owner_user_id'],
-            'name': data['name'],
-            'phone_number': data.get('phone_number'),
-            'business_email': data.get('business_email'),
-            'address': data['address']
+            'owner_user_id': business.owner_user_id,
+            'name': business.name,
+            'phone_number': business.phone_number,
+            'business_email': business.business_email,
+            'address': business.address
         }).execute()
         
         return result.data[0]
@@ -59,19 +73,26 @@ async def list_businesses(owner_user_id: str):
 
 
 @router.put("/{business_id}", summary="Update business")
-async def update_business(business_id: int, request: Request):
+async def update_business(business_id: int, business: BusinessUpdate):
     """Updates business information"""
     try:
         db = supabase()
-        data = await request.json()
         
-        result = db.table('business').update(data).eq('id', business_id).execute()
+        # Only update fields that are provided
+        update_data = business.model_dump(exclude_unset=True)
+        
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No fields to update")
+        
+        result = db.table('business').update(update_data).eq('id', business_id).execute()
         
         if not result.data:
             raise HTTPException(status_code=404, detail="Business not found")
         
         return result.data[0]
         
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

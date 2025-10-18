@@ -1,11 +1,34 @@
 # api/crud/agent.py
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from typing import Optional
 from twilio.rest import Client
 import os
 from ..database import supabase
 
 router = APIRouter(prefix="/agent", tags=["Agent"])
+
+class AgentCreate(BaseModel):
+    business_id: int
+    area_code: str
+    name: Optional[str] = "Agent"
+    model_type: Optional[str] = "gpt-5-nano"
+    temperature: Optional[float] = 0.7
+    voice_model: Optional[str] = "Joanna"
+    prompt: Optional[str] = None
+    greeting: Optional[str] = "Hello There!"
+    goodbye: Optional[str] = "Goodbye and take care!"
+
+class AgentUpdate(BaseModel):
+    name: Optional[str] = None
+    model_type: Optional[str] = None
+    temperature: Optional[float] = None
+    voice_model: Optional[str] = None
+    prompt: Optional[str] = None
+    greeting: Optional[str] = None
+    goodbye: Optional[str] = None
+    status: Optional[str] = None
 
 async def provision_phone_for_agent(agent_id: int, area_code: str):
     """Internal function to provision phone number for agent"""
@@ -49,14 +72,13 @@ async def provision_phone_for_agent(agent_id: int, area_code: str):
 
 
 @router.post("", summary="Create agent")
-async def create_agent(request: Request):
+async def create_agent(agent: AgentCreate):
     """Creates agent and provisions phone number"""
     try:
         db = supabase()
-        data = await request.json()
         
-        business_id = data['business_id']
-        area_code = data['area_code']
+        business_id = agent.business_id
+        area_code = agent.area_code
         
         # Check if business exists
         business = db.table('business').select('*').eq('id', business_id).single().execute()
@@ -71,28 +93,28 @@ async def create_agent(request: Request):
         # Create agent
         agent_result = db.table('agent').insert({
             'business_id': business_id,
-            'name': data.get('name', 'Agent'),
-            'model_type': data.get('model_type', 'gpt-5-nano'),
-            'temperature': data.get('temperature', 0.7),
-            'voice_model': data.get('voice_model', 'Joanna'),
-            'prompt': data.get('prompt'),
-            'greeting': data.get('greeting', 'Hello There!'),
-            'goodbye': data.get('goodbye', 'Goodbye and take care!'),
+            'name': agent.name,
+            'model_type': agent.model_type,
+            'temperature': agent.temperature,
+            'voice_model': agent.voice_model,
+            'prompt': agent.prompt,
+            'greeting': agent.greeting,
+            'goodbye': agent.goodbye,
             'status': 'active'
         }).execute()
         
-        agent = agent_result.data[0]
+        agent_data = agent_result.data[0]
         
         # Provision phone number
         try:
-            phone = await provision_phone_for_agent(agent['id'], area_code)
-            agent['phone_number'] = phone
+            phone = await provision_phone_for_agent(agent_data['id'], area_code)
+            agent_data['phone_number'] = phone
         except Exception as e:
             # If phone provisioning fails, still return agent but with error
-            agent['phone_number'] = None
-            agent['phone_error'] = str(e)
+            agent_data['phone_number'] = None
+            agent_data['phone_error'] = str(e)
         
-        return agent
+        return agent_data
         
     except HTTPException:
         raise
@@ -151,19 +173,13 @@ async def get_agent_by_business(business_id: int):
 
 
 @router.put("/{agent_id}", summary="Update agent")
-async def update_agent(agent_id: int, request: Request):
+async def update_agent(agent_id: int, agent: AgentUpdate):
     """Updates agent configuration"""
     try:
         db = supabase()
-        data = await request.json()
         
-        # Build update dict
-        update_data = {}
-        allowed_fields = ['name', 'model_type', 'temperature', 'voice_model', 'prompt', 'greeting', 'goodbye', 'status']
-        
-        for field in allowed_fields:
-            if field in data:
-                update_data[field] = data[field]
+        # Only update fields that are provided
+        update_data = agent.model_dump(exclude_unset=True)
         
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields to update")
