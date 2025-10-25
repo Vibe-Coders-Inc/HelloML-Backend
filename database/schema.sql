@@ -62,8 +62,8 @@ CREATE TABLE IF NOT EXISTS public.document (
   id            SERIAL PRIMARY KEY,
   agent_id   INT NOT NULL REFERENCES public.agent(id) ON DELETE CASCADE, 
   filename      TEXT NOT NULL,                 
-  storage_url  TEXT NOT NULL,                 -- path within the bucket
-  file_type     TEXT,                          -- e.g., application/pdf, text/plain
+  storage_url  TEXT, -- path within the bucket (wont be using)
+  file_type     TEXT NOT NULL DEFAULT 'text/plain', -- application/pdf, text/plain
   uploaded_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   error_message TEXT,     
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
