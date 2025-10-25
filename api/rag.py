@@ -1,5 +1,4 @@
 # api/rag.py
-from openai import OpenAI
 
 EMBED_MODEL = "text-embedding-3-small"   # 1536 dims
 
@@ -54,7 +53,7 @@ def embed_texts(client, texts):
     return embeddings
 
 # sb = supabase client, ai = openai client
-def upsert_document_from_text(sb, ai, agent_id, filename, raw_text,
+def upsert_document_text(sb, ai, agent_id, filename, text,
                               storage_url="", file_type="text/plain"):
     """
     Adds a new document and its vectorized chunks to the database.
@@ -82,7 +81,7 @@ def upsert_document_from_text(sb, ai, agent_id, filename, raw_text,
     doc_id = doc_res.data[0]["id"]
 
     # Split text into smaller chunks
-    chunks = chunk_text(raw_text)
+    chunks = chunk_text(text)
     if not chunks:
         raise ValueError("No text found in document to embed.")
 
