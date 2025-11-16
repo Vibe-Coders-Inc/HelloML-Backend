@@ -49,9 +49,11 @@ async def provision_phone_for_agent(agent_id: int, area_code: str):
     
     if not available:
         raise Exception(f"No numbers available in area code {area_code}")
-    
-    webhook_url = f"https://www.helloml.app/conversation/{agent_id}/voice"
-    
+
+    # Updated to use OpenAI Realtime API + Twilio Media Streams
+    base_url = os.getenv("API_BASE_URL", "https://api.helloml.app")
+    webhook_url = f"{base_url}/conversation/{agent_id}/realtime-voice"
+
     number = client.incoming_phone_numbers.create(
         phone_number=available[0].phone_number,
         voice_url=webhook_url,
