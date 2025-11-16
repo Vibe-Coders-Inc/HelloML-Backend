@@ -1,6 +1,7 @@
 # api/main.py
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 import sys
 import os
 
@@ -12,11 +13,25 @@ from .crud.phone import router as phone_router
 from .crud.conversation import router as conversation_router
 from .crud.realtime_voice import router as realtime_router
 from .crud.rag_endpoints import router as rag_router
+from api import __version__
 
 app = FastAPI(
     title="HelloML API",
     description="API for managing AI voice agents with phone provisioning",
-    version="1.0.0"
+    version=__version__
+)
+
+# Configure CORS for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://helloml.app",
+        "http://localhost:3000",  # For local development
+        "http://localhost:5173",  # Vite default port
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Register all routers
@@ -31,6 +46,11 @@ app.include_router(rag_router)
 def index():
     """Returns API status"""
     return {"status": "running", "message": "HelloML API"}
+
+@app.get("/version", summary="API version")
+def version():
+    """Returns API version"""
+    return {"version": __version__}
 
 if __name__ == "__main__":
     import uvicorn
