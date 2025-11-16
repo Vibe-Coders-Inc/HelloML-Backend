@@ -17,7 +17,7 @@ from api.audio_utils import twilio_to_openai, openai_to_twilio
 router = APIRouter()
 
 
-@router.post('/{agent_id}/realtime-voice', summary="Handle incoming call (Twilio webhook)")
+@router.post('/{agent_id}/voice', summary="Handle incoming call (Twilio webhook)")
 async def handle_incoming_call(agent_id: int, request: Request):
     """
     Receives incoming call from Twilio and returns TwiML to initiate Media Stream.
