@@ -6,3 +6,6 @@ pydantic==2.8.0
 uvicorn==0.30.6
 PyPDF2
 supabase
+websockets>=12.0
+scipy>=1.11.0
+numpy>=1.24.0
