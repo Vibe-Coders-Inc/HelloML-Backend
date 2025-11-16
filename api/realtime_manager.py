@@ -26,6 +26,8 @@ class RealtimeSession:
         on_audio: Optional[Callable] = None,
         on_transcript: Optional[Callable] = None,
         on_error: Optional[Callable] = None,
+        twilio_ws: Optional[Any] = None,
+        call_sid: Optional[str] = None,
     ):
         """
         Initialize Realtime Session.
@@ -37,6 +39,8 @@ class RealtimeSession:
             on_audio: Callback for audio output (receives base64 PCM16)
             on_transcript: Callback for transcript updates
             on_error: Callback for error handling
+            twilio_ws: Twilio Media Stream WebSocket connection
+            call_sid: Twilio call SID for call control
         """
         self.agent_id = agent_id
         self.conversation_id = conversation_id
@@ -44,6 +48,8 @@ class RealtimeSession:
         self.on_audio = on_audio
         self.on_transcript = on_transcript
         self.on_error = on_error
+        self.twilio_ws = twilio_ws
+        self.call_sid = call_sid
 
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.api_key = os.getenv("OPENAI_API_KEY")
@@ -112,7 +118,11 @@ class RealtimeSession:
                     "eagerness": "medium",
                     "interrupt_response": True
                 },
-                "tools": [self._get_rag_tool_definition()]
+                "tools": [
+                    self._get_rag_tool_definition(),
+                    self._get_end_call_tool_definition(),
+                    self._get_transfer_call_tool_definition()
+                ]
             }
         }
 
@@ -139,6 +149,46 @@ class RealtimeSession:
                     }
                 },
                 "required": ["query"]
+            }
+        }
+
+    def _get_end_call_tool_definition(self) -> Dict[str, Any]:
+        """Get the end_call function tool definition."""
+        return {
+            "type": "function",
+            "name": "end_call",
+            "description": "Gracefully end the current phone call. Use this when the conversation is complete, the caller wants to hang up, or you need to terminate the call for any reason.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Optional reason for ending the call (for logging purposes)"
+                    }
+                },
+                "required": []
+            }
+        }
+
+    def _get_transfer_call_tool_definition(self) -> Dict[str, Any]:
+        """Get the transfer_call function tool definition."""
+        return {
+            "type": "function",
+            "name": "transfer_call",
+            "description": "Transfer the current phone call to another phone number. Use this when the caller needs to speak with someone else or requires specialized assistance.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "phone_number": {
+                        "type": "string",
+                        "description": "The phone number to transfer the call to (E.164 format, e.g., +14155551234)"
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Optional reason for the transfer (for logging and announcement purposes)"
+                    }
+                },
+                "required": ["phone_number"]
             }
         }
 
@@ -237,24 +287,34 @@ class RealtimeSession:
                 await self.on_error(error_msg)
 
     async def _handle_function_call(self, item: Dict[str, Any]):
-        """Handle function call from OpenAI (RAG search)."""
+        """Handle function call from OpenAI (RAG search, end_call, transfer_call)."""
         call_id = item.get("call_id")
         function_name = item.get("name")
         arguments_str = item.get("arguments", "{}")
 
         print(f"[Function Call] {function_name} with args: {arguments_str}")
 
-        if function_name != "search_knowledge_base":
-            return
-
         try:
             # Parse arguments
             args = json.loads(arguments_str)
-            query = args.get("query", "")
-            k = args.get("k", 5)
 
-            # Execute RAG search
-            result = await self._execute_rag_search(query, k)
+            # Route to appropriate function handler
+            if function_name == "search_knowledge_base":
+                query = args.get("query", "")
+                k = args.get("k", 5)
+                result = await self._execute_rag_search(query, k)
+
+            elif function_name == "end_call":
+                reason = args.get("reason", "Conversation completed")
+                result = await self._execute_end_call(reason)
+
+            elif function_name == "transfer_call":
+                phone_number = args.get("phone_number")
+                reason = args.get("reason", "Transferring to another department")
+                result = await self._execute_transfer_call(phone_number, reason)
+
+            else:
+                result = {"error": f"Unknown function: {function_name}"}
 
             # Send function result back to OpenAI
             response_event = {
@@ -268,8 +328,9 @@ class RealtimeSession:
 
             await self.send_event(response_event)
 
-            # Trigger response generation
-            await self.send_event({"type": "response.create"})
+            # Trigger response generation (unless call ended)
+            if function_name != "end_call":
+                await self.send_event({"type": "response.create"})
 
         except Exception as e:
             print(f"[Function Call] Error: {e}")
@@ -325,6 +386,92 @@ class RealtimeSession:
             print(f"[RAG Search] Error: {e}")
             return {
                 "found": False,
+                "error": str(e)
+            }
+
+    async def _execute_end_call(self, reason: str = "Conversation completed") -> Dict[str, Any]:
+        """End the current phone call gracefully."""
+        try:
+            print(f"[EndCall] Ending call. Reason: {reason}")
+
+            # Close Twilio WebSocket connection
+            if self.twilio_ws:
+                await self.twilio_ws.close(code=1000, reason="Call ended by agent")
+
+            # Update conversation status
+            db = supabase()
+            db.table('conversation').update({
+                'status': 'completed',
+                'ended_at': 'now()'
+            }).eq('id', self.conversation_id).execute()
+
+            # Disconnect OpenAI Realtime session
+            await self.disconnect()
+
+            return {
+                "success": True,
+                "message": f"Call ended successfully. Reason: {reason}"
+            }
+
+        except Exception as e:
+            print(f"[EndCall] Error: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _execute_transfer_call(self, phone_number: str, reason: str = "Transferring call") -> Dict[str, Any]:
+        """Transfer the current call to another phone number."""
+        try:
+            print(f"[TransferCall] Transferring to {phone_number}. Reason: {reason}")
+
+            if not self.call_sid:
+                return {
+                    "success": False,
+                    "error": "Call SID not available for transfer"
+                }
+
+            # Use Twilio REST API to update the call with a transfer TwiML
+            from twilio.rest import Client
+
+            account_sid = os.getenv("ACCOUNT_SID")
+            auth_token = os.getenv("AUTH_TOKEN")
+
+            if not account_sid or not auth_token:
+                return {
+                    "success": False,
+                    "error": "Twilio credentials not configured"
+                }
+
+            client = Client(account_sid, auth_token)
+
+            # Create TwiML to dial the transfer number
+            transfer_twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
+                                <Response>
+                                    <Say voice="Polly.Joanna">{reason}</Say>
+                                    <Dial>{phone_number}</Dial>
+                                </Response>'''
+
+            # Update the active call
+            client.calls(self.call_sid).update(twiml=transfer_twiml)
+
+            print(f"[TransferCall] Successfully transferred to {phone_number}")
+
+            # Update conversation with transfer info
+            db = supabase()
+            db.table('conversation').update({
+                'status': 'transferred'
+            }).eq('id', self.conversation_id).execute()
+
+            return {
+                "success": True,
+                "message": f"Call transferred to {phone_number}"
+            }
+
+        except Exception as e:
+            print(f"[TransferCall] Error: {e}")
+            return {
+                "success": False,
                 "error": str(e)
             }
 
