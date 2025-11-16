@@ -10,7 +10,7 @@ from .crud.business import router as business_router
 from .crud.agent import router as agent_router
 from .crud.phone import router as phone_router
 from .crud.conversation import router as conversation_router
-from .crud.webhook import router as webhook_router
+from .crud.realtime_voice import router as realtime_router
 from .crud.rag_endpoints import router as rag_router
 
 app = FastAPI(
@@ -24,7 +24,7 @@ app.include_router(business_router)
 app.include_router(agent_router)
 app.include_router(phone_router)
 app.include_router(conversation_router)
-app.include_router(webhook_router)
+app.include_router(realtime_router)
 app.include_router(rag_router)
 
 @app.get("/", summary="API status")
