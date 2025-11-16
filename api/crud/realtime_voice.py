@@ -55,11 +55,14 @@ async def handle_incoming_call(agent_id: int, request: Request):
 
         # Build TwiML response with Media Stream
         # The WebSocket URL is where Twilio will connect for bidirectional audio
-        ws_url = f"wss://{request.url.hostname}/conversation/{agent_id}/media-stream?conversation_id={conversation_id}"
+        # Note: Query parameters are stripped by Twilio, use <Parameter> tags instead
+        ws_url = f"wss://{request.url.hostname}/conversation/{agent_id}/media-stream"
+
+        print(f"[TwilioWebhook] Incoming call for agent {agent_id}, conversation {conversation_id}", flush=True)
+        print(f"[TwilioWebhook] Generated WebSocket URL: {ws_url}", flush=True)
 
         twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
                     <Response>
-                        <Say voice="Polly.Joanna">{greeting}</Say>
                         <Connect>
                             <Stream url="{ws_url}">
                                 <Parameter name="agent_id" value="{agent_id}" />
@@ -67,8 +70,6 @@ async def handle_incoming_call(agent_id: int, request: Request):
                             </Stream>
                         </Connect>
                     </Response>'''
-
-        print(f"[TwilioWebhook] Incoming call for agent {agent_id}, conversation {conversation_id}")
 
         return Response(content=twiml, media_type="application/xml")
 
@@ -81,31 +82,105 @@ async def handle_incoming_call(agent_id: int, request: Request):
 
 
 @router.websocket('/{agent_id}/media-stream')
-async def media_stream_handler(websocket: WebSocket, agent_id: int, conversation_id: int):
+async def media_stream_handler(websocket: WebSocket, agent_id: int):
     """
     Handle bidirectional audio streaming between Twilio and OpenAI Realtime API.
 
     Twilio sends/receives: μ-law 8kHz (base64)
     OpenAI sends/receives: PCM16 24kHz (base64)
     """
-    await websocket.accept()
-    print(f"[MediaStream] WebSocket connected for conversation {conversation_id}")
+    print(f"[MediaStream] WebSocket connection attempt for agent {agent_id}", flush=True)
 
-    db = supabase()
-    realtime_session: RealtimeSession = None
+    try:
+        await websocket.accept()
+        print(f"[MediaStream] WebSocket accepted", flush=True)
+    except Exception as e:
+        print(f"[MediaStream] Error accepting WebSocket: {e}", flush=True)
+        return
+
+    # Wait for the "start" event from Twilio to get conversation_id from customParameters
+    # Twilio sends "connected" event first, then "start" event
+    conversation_id = None
     stream_sid = None
+    call_sid = None
+
+    try:
+        # Loop through initial messages to find the "start" event
+        start_event_found = False
+        max_attempts = 5
+        attempt = 0
+
+        while not start_event_found and attempt < max_attempts:
+            attempt += 1
+            message = await websocket.receive_text()
+            print(f"[MediaStream] Received message {attempt}: {message[:200]}", flush=True)
+
+            event = json.loads(message)
+            event_type = event.get("event")
+
+            if event_type == "connected":
+                print(f"[MediaStream] Received 'connected' event, waiting for 'start'", flush=True)
+                continue
+            elif event_type == "start":
+                stream_sid = event.get("start", {}).get("streamSid")
+                call_sid = event.get("start", {}).get("callSid")
+                custom_params = event.get("start", {}).get("customParameters", {})
+                conversation_id = custom_params.get("conversation_id")
+
+                print(f"[MediaStream] Stream started: {stream_sid}", flush=True)
+                print(f"[MediaStream] Call SID: {call_sid}", flush=True)
+                print(f"[MediaStream] Extracted conversation_id from customParameters: {conversation_id}", flush=True)
+                print(f"[MediaStream] Custom parameters: {custom_params}", flush=True)
+                start_event_found = True
+            else:
+                print(f"[MediaStream] Unexpected event type: {event_type}", flush=True)
+
+        if not start_event_found:
+            print(f"[MediaStream] Error: Did not receive 'start' event after {attempt} messages", flush=True)
+            await websocket.close(code=1008, reason="Start event not received")
+            return
+    except Exception as e:
+        print(f"[MediaStream] Error reading start event: {e}", flush=True)
+        import traceback
+        print(f"[MediaStream] Traceback: {traceback.format_exc()}", flush=True)
+        await websocket.close(code=1008, reason="Failed to read start event")
+        return
+
+    if not conversation_id:
+        print("[MediaStream] Error: conversation_id not in customParameters", flush=True)
+        await websocket.close(code=1008, reason="Missing conversation_id")
+        return
+
+    try:
+        conversation_id = int(conversation_id)
+        print(f"[MediaStream] Parsed conversation_id: {conversation_id}", flush=True)
+    except ValueError:
+        print("[MediaStream] Error: Invalid conversation_id format", flush=True)
+        await websocket.close(code=1008, reason="Invalid conversation_id")
+        return
+
+    print(f"[MediaStream] WebSocket connected for conversation {conversation_id}", flush=True)
+
+    db = None
+    realtime_session: RealtimeSession = None
 
     # Audio buffering for Twilio
     twilio_audio_queue = asyncio.Queue()
 
     try:
+        print(f"[MediaStream] Getting database connection", flush=True)
+        db = supabase()
+        print(f"[MediaStream] Database connection established", flush=True)
         # Get agent config
+        print(f"[MediaStream] Fetching agent config for agent_id={agent_id}", flush=True)
         agent_data = db.table('agent').select('*').eq('id', agent_id).single().execute()
         if not agent_data.data:
+            print(f"[MediaStream] Error: Agent {agent_id} not found", flush=True)
             await websocket.close(code=1008, reason="Agent not found")
             return
 
         agent_config = agent_data.data
+        print(f"[MediaStream] Agent config loaded: {agent_config.get('name', 'unknown')}", flush=True)
 
         # Callback to send audio to Twilio
         async def send_audio_to_twilio(openai_audio_base64: str):
@@ -133,19 +208,33 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int, conversation
 
         # Callback for error handling
         async def handle_error(error_msg: str):
-            print(f"[MediaStream] Realtime API error: {error_msg}")
+            print(f"[MediaStream] Realtime API error: {error_msg}", flush=True)
 
         # Create OpenAI Realtime session
-        realtime_session = RealtimeSession(
-            agent_id=agent_id,
-            conversation_id=conversation_id,
-            agent_config=agent_config,
-            on_audio=send_audio_to_twilio,
-            on_error=handle_error
-        )
+        print(f"[MediaStream] Creating OpenAI Realtime session", flush=True)
+        try:
+            realtime_session = RealtimeSession(
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                agent_config=agent_config,
+                on_audio=send_audio_to_twilio,
+                on_error=handle_error,
+                twilio_ws=websocket,
+                call_sid=call_sid
+            )
+            print(f"[MediaStream] Realtime session created successfully", flush=True)
+        except Exception as e:
+            print(f"[MediaStream] Error creating Realtime session: {e}", flush=True)
+            raise
 
         # Connect to OpenAI Realtime API
-        await realtime_session.connect()
+        print(f"[MediaStream] Connecting to OpenAI Realtime API", flush=True)
+        try:
+            await realtime_session.connect()
+            print(f"[MediaStream] Successfully connected to OpenAI Realtime API", flush=True)
+        except Exception as e:
+            print(f"[MediaStream] Error connecting to OpenAI Realtime API: {e}", flush=True)
+            raise
 
         # Main event loop: receive events from Twilio
         async for message in websocket.iter_text():
@@ -186,10 +275,13 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int, conversation
                 print(f"[MediaStream] Error processing event: {e}")
 
     except WebSocketDisconnect:
-        print(f"[MediaStream] WebSocket disconnected for conversation {conversation_id}")
+        print(f"[MediaStream] WebSocket disconnected for conversation {conversation_id}", flush=True)
     except Exception as e:
-        print(f"[MediaStream] Error in media stream handler: {e}")
+        print(f"[MediaStream] Error in media stream handler: {e}", flush=True)
+        import traceback
+        print(f"[MediaStream] Traceback: {traceback.format_exc()}", flush=True)
     finally:
+        print(f"[MediaStream] Entering cleanup for conversation {conversation_id}", flush=True)
         # Clean up
         if realtime_session:
             await realtime_session.disconnect()
