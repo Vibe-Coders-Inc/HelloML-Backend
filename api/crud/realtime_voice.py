@@ -14,7 +14,7 @@ from api.realtime_manager import RealtimeSession
 from api.audio_utils import twilio_to_openai, openai_to_twilio
 
 
-router = APIRouter()
+router = APIRouter(prefix="/conversation", tags=["Voice"])
 
 
 @router.post('/{agent_id}/voice', summary="Handle incoming call (Twilio webhook)")
