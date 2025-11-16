@@ -52,7 +52,7 @@ async def provision_phone_for_agent(agent_id: int, area_code: str):
 
     # Updated to use OpenAI Realtime API + Twilio Media Streams
     base_url = os.getenv("API_BASE_URL", "https://api.helloml.app")
-    webhook_url = f"{base_url}/conversation/{agent_id}/realtime-voice"
+    webhook_url = f"{base_url}/conversation/{agent_id}/voice"
 
     number = client.incoming_phone_numbers.create(
         phone_number=available[0].phone_number,
