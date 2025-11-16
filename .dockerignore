@@ -1,0 +1,42 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+.venv
+venv
+env
+
+# IDEs
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+.env
+.envrc
+*.log
+.mcp.json
+
+# Deployment
+REALTIME_API_MIGRATION.md
+update_webhook_domain.py
+conversation_demo/
+
+# Documentation
+README.md
