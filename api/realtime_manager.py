@@ -112,40 +112,58 @@ TOOL USAGE GUIDELINES:
         # Get base instructions from agent config
         base_instructions = self.agent_config.get('prompt', default_prompt)
 
-        # Build complete instructions with language and greeting directives
-        instructions = f"""LANGUAGE: You MUST speak ONLY in English. Never use Spanish or any other language.
+        # Build complete instructions with CRITICAL directives at the top
+        instructions = f"""*** CRITICAL INSTRUCTIONS - FOLLOW EXACTLY ***
 
-ROLE AND CONTEXT:
-{base_instructions}
+1. LANGUAGE: You MUST speak ONLY in English. NEVER use Spanish, French, or any other language under any circumstances.
 
-GREETING: When you first respond to the caller, say EXACTLY: "{self.greeting}"
-Do not add anything before or after this greeting. Just say it once and then listen.
+2. FIRST RESPONSE / GREETING: Your very first words when this call starts MUST be EXACTLY: "{self.greeting}"
+   - Say this greeting immediately and exactly as written
+   - Do NOT add any introduction, do NOT say "hello" or "hi" first
+   - After the greeting, wait for the user to respond
 
-GOODBYE: When ending the call, say EXACTLY: "{self.goodbye}"
+3. KNOWLEDGE BASE SEARCH: BEFORE answering ANY question about business information, policies, products, services, or facts:
+   - You MUST FIRST call the search_knowledge_base tool
+   - Search with relevant keywords from the user's question
+   - THEN provide your answer based ONLY on the search results
+   - If the search returns no results, say you don't have that information
+   - NEVER make up answers - ALWAYS search first
 
-REMEMBER: Speak only English. Follow the greeting and goodbye exactly as written above."""
+4. GOODBYE: When ending the call, say EXACTLY: "{self.goodbye}"
+
+*** YOUR ROLE ***
+
+{base_instructions}"""
 
         # Get configuration from agent settings
         voice = self.agent_config.get('voice_model', 'alloy')
         temperature = self.agent_config.get('temperature', 0.8)
         max_tokens = self.agent_config.get('max_response_output_tokens')
 
-        # Turn detection settings
+        # Turn detection settings from agent config
         turn_detection_type = self.agent_config.get('turn_detection_type', 'server_vad')
-        turn_detection_threshold = self.agent_config.get('turn_detection_threshold', 0.5)
-        turn_detection_silence_ms = self.agent_config.get('turn_detection_silence_duration_ms', 700)  # Increased to prevent cutting off user
-        turn_detection_interrupt = self.agent_config.get('turn_detection_interrupt', True)
 
-        # Build turn detection config
+        # Build turn detection config according to OpenAI Realtime API spec
         turn_detection_config = {
             "type": turn_detection_type,
         }
 
-        # Add type-specific parameters
-        if turn_detection_type in ["semantic_vad", "server_vad"]:
-            turn_detection_config["threshold"] = turn_detection_threshold
-            turn_detection_config["silence_duration_ms"] = turn_detection_silence_ms
-            turn_detection_config["interrupt_response"] = turn_detection_interrupt
+        # Add parameters based on VAD type (following OpenAI API spec)
+        if turn_detection_type == "server_vad":
+            # Server VAD specific parameters
+            turn_detection_config["threshold"] = self.agent_config.get('turn_detection_threshold', 0.5)
+            turn_detection_config["prefix_padding_ms"] = self.agent_config.get('turn_detection_prefix_padding_ms', 300)
+            turn_detection_config["silence_duration_ms"] = self.agent_config.get('turn_detection_silence_duration_ms', 500)  # Lowered to 500ms for better responsiveness and interruption
+            turn_detection_config["create_response"] = self.agent_config.get('turn_detection_create_response', True)
+            turn_detection_config["interrupt_response"] = self.agent_config.get('turn_detection_interrupt_response', True)  # Ensures user can interrupt
+
+        elif turn_detection_type == "semantic_vad":
+            # Semantic VAD specific parameters
+            turn_detection_config["eagerness"] = self.agent_config.get('turn_detection_eagerness', 'medium')  # Medium eagerness for balanced response
+            turn_detection_config["prefix_padding_ms"] = self.agent_config.get('turn_detection_prefix_padding_ms', 300)
+            turn_detection_config["silence_duration_ms"] = self.agent_config.get('turn_detection_silence_duration_ms', 500)  # Lowered for better responsiveness
+            turn_detection_config["create_response"] = self.agent_config.get('turn_detection_create_response', True)
+            turn_detection_config["interrupt_response"] = self.agent_config.get('turn_detection_interrupt_response', True)  # Ensures user can interrupt
 
         session_config = {
             "type": "session.update",
