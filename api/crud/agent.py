@@ -28,7 +28,7 @@ class AgentCreate(BaseModel):
     business_id: int
     area_code: str
     name: Optional[str] = "Agent"
-    model_type: Optional[str] = "gpt-5-nano"
+    model_type: Optional[str] = "gpt-4o-mini"  # Changed to valid OpenAI Realtime model
     temperature: Optional[float] = 0.7
     voice_model: Optional[str] = "nova"  # Changed from "Joanna" to valid OpenAI voice
     prompt: Optional[str] = None

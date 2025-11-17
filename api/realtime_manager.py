@@ -15,6 +15,25 @@ from openai import OpenAI
 import os
 
 
+def get_realtime_model_name(model_type: str) -> str:
+    """
+    Map UI model names to OpenAI Realtime API model names.
+
+    The UI may use simplified names, but OpenAI expects specific model identifiers.
+    """
+    # Model name mappings
+    model_mapping = {
+        "gpt-4o-mini": "gpt-4o-mini-realtime-preview-2024-12-17",
+        "gpt-4o-realtime": "gpt-4o-realtime-preview-2024-12-17",
+        "gpt-4o": "gpt-4o-realtime-preview-2024-12-17",
+        "gpt-5-nano": "gpt-4o-mini-realtime-preview-2024-12-17",  # Fallback to mini
+        "gpt-realtime": "gpt-4o-realtime-preview-2024-12-17",
+    }
+
+    # Return mapped name, or pass through if already a full name
+    return model_mapping.get(model_type, model_type)
+
+
 class RealtimeSession:
     """Manages an OpenAI Realtime API session for a voice agent."""
 
@@ -70,7 +89,11 @@ class RealtimeSession:
 
     async def connect(self):
         """Connect to OpenAI Realtime API and configure session."""
-        url = "wss://api.openai.com/v1/realtime?model=gpt-realtime"
+        # Get model from agent config and map to OpenAI model name
+        model_type = self.agent_config.get('model_type', 'gpt-4o-realtime')
+        self.model_name = get_realtime_model_name(model_type)
+
+        url = f"wss://api.openai.com/v1/realtime?model={self.model_name}"
 
         headers = {
             "Authorization": f"Bearer {self.api_key}"
@@ -79,7 +102,7 @@ class RealtimeSession:
         try:
             self.ws = await websockets.connect(url, additional_headers=headers)
             self.running = True
-            print(f"[RealtimeSession] Connected for conversation {self.conversation_id}")
+            print(f"[RealtimeSession] Connected for conversation {self.conversation_id} using model {self.model_name}")
 
             # Send session configuration
             await self._configure_session()
@@ -128,14 +151,33 @@ IMPORTANT GREETING AND GOODBYE INSTRUCTIONS:
 - When ending the call (via end_call function), you MUST say EXACTLY: "{self.goodbye}" before hanging up
 - Do not deviate from these exact greeting and goodbye messages"""
 
-        voice = self.agent_config.get('voice_model', 'shimmer')
-        temperature = self.agent_config.get('temperature', 0.7)
+        # Get configuration from agent settings
+        voice = self.agent_config.get('voice_model', 'alloy')
+        temperature = self.agent_config.get('temperature', 0.8)
+        max_tokens = self.agent_config.get('max_response_output_tokens')
+
+        # Turn detection settings
+        turn_detection_type = self.agent_config.get('turn_detection_type', 'semantic_vad')
+        turn_detection_threshold = self.agent_config.get('turn_detection_threshold', 0.5)
+        turn_detection_silence_ms = self.agent_config.get('turn_detection_silence_duration_ms', 200)
+        turn_detection_interrupt = self.agent_config.get('turn_detection_interrupt', True)
+
+        # Build turn detection config
+        turn_detection_config = {
+            "type": turn_detection_type,
+        }
+
+        # Add type-specific parameters
+        if turn_detection_type in ["semantic_vad", "server_vad"]:
+            turn_detection_config["threshold"] = turn_detection_threshold
+            turn_detection_config["silence_duration_ms"] = turn_detection_silence_ms
+            turn_detection_config["interrupt_response"] = turn_detection_interrupt
 
         session_config = {
             "type": "session.update",
             "session": {
                 "type": "realtime",
-                "model": "gpt-realtime",
+                "model": self.model_name,
                 "instructions": instructions,
                 "audio": {
                     "input": {
@@ -150,11 +192,7 @@ IMPORTANT GREETING AND GOODBYE INSTRUCTIONS:
                     "model": "whisper-1"
                 },
                 "temperature": temperature,
-                "turn_detection": {
-                    "type": "semantic_vad",
-                    "eagerness": "low",  # Changed from "medium" to "low" to let users finish their thoughts
-                    "interrupt_response": True
-                },
+                "turn_detection": turn_detection_config,
                 "tools": [
                     self._get_rag_tool_definition(),
                     self._get_end_call_tool_definition(),
@@ -162,6 +200,10 @@ IMPORTANT GREETING AND GOODBYE INSTRUCTIONS:
                 ]
             }
         }
+
+        # Add max_response_output_tokens if specified
+        if max_tokens is not None:
+            session_config["session"]["max_response_output_tokens"] = max_tokens
 
         await self.send_event(session_config)
         print(f"[RealtimeSession] Session configured with voice={voice}, temp={temperature}")
