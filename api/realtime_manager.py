@@ -28,6 +28,8 @@ class RealtimeSession:
         on_error: Optional[Callable] = None,
         twilio_ws: Optional[Any] = None,
         call_sid: Optional[str] = None,
+        greeting: Optional[str] = None,
+        goodbye: Optional[str] = None,
     ):
         """
         Initialize Realtime Session.
@@ -41,6 +43,8 @@ class RealtimeSession:
             on_error: Callback for error handling
             twilio_ws: Twilio Media Stream WebSocket connection
             call_sid: Twilio call SID for call control
+            greeting: Initial greeting message to speak when call starts
+            goodbye: Farewell message to speak before call ends
         """
         self.agent_id = agent_id
         self.conversation_id = conversation_id
@@ -50,6 +54,8 @@ class RealtimeSession:
         self.on_error = on_error
         self.twilio_ws = twilio_ws
         self.call_sid = call_sid
+        self.greeting = greeting or "Hello! How can I help you today?"
+        self.goodbye = goodbye or "Goodbye! Have a great day!"
 
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.api_key = os.getenv("OPENAI_API_KEY")
@@ -128,7 +134,7 @@ TOOL USAGE GUIDELINES:
                 "temperature": temperature,
                 "turn_detection": {
                     "type": "semantic_vad",
-                    "eagerness": "medium",
+                    "eagerness": "low",  # Changed from "medium" to "low" to let users finish their thoughts
                     "interrupt_response": True
                 },
                 "tools": [
@@ -141,6 +147,9 @@ TOOL USAGE GUIDELINES:
 
         await self.send_event(session_config)
         print(f"[RealtimeSession] Session configured with voice={voice}, temp={temperature}")
+
+        # Send initial greeting to make agent speak first
+        await self._send_initial_greeting()
 
     def _get_rag_tool_definition(self) -> Dict[str, Any]:
         """Get the RAG semantic search function tool definition."""
@@ -204,6 +213,76 @@ TOOL USAGE GUIDELINES:
                 "required": ["phone_number"]
             }
         }
+
+    async def _send_initial_greeting(self):
+        """
+        Send initial greeting message to make the agent speak first.
+
+        This creates a conversation item with the greeting text and triggers
+        a response, so the agent greets the caller immediately when they connect.
+        """
+        try:
+            # Create conversation item with greeting as assistant message
+            greeting_event = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": self.greeting
+                        }
+                    ]
+                }
+            }
+            await self.send_event(greeting_event)
+            print(f"[RealtimeSession] Sent greeting item: {self.greeting}")
+
+            # Trigger response to make the agent speak the greeting
+            response_event = {
+                "type": "response.create"
+            }
+            await self.send_event(response_event)
+            print(f"[RealtimeSession] Triggered initial greeting response")
+
+        except Exception as e:
+            print(f"[RealtimeSession] Failed to send initial greeting: {e}")
+
+    async def _send_goodbye_message(self):
+        """
+        Send goodbye message before ending the call.
+
+        This creates a conversation item with the goodbye text and triggers
+        a response, so the agent says farewell before the call ends.
+        """
+        try:
+            # Create conversation item with goodbye as assistant message
+            goodbye_event = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": self.goodbye
+                        }
+                    ]
+                }
+            }
+            await self.send_event(goodbye_event)
+            print(f"[RealtimeSession] Sent goodbye item: {self.goodbye}")
+
+            # Trigger response to make the agent speak the goodbye
+            response_event = {
+                "type": "response.create"
+            }
+            await self.send_event(response_event)
+            print(f"[RealtimeSession] Triggered goodbye response")
+
+        except Exception as e:
+            print(f"[RealtimeSession] Failed to send goodbye message: {e}")
 
     async def send_audio(self, audio_base64: str):
         """
@@ -406,6 +485,12 @@ TOOL USAGE GUIDELINES:
         """End the current phone call gracefully."""
         try:
             print(f"[EndCall] Ending call. Reason: {reason}")
+
+            # Send goodbye message before ending call
+            await self._send_goodbye_message()
+
+            # Wait briefly for goodbye audio to play (approximately 3 seconds for typical goodbye message)
+            await asyncio.sleep(3)
 
             # Close Twilio WebSocket connection
             if self.twilio_ws:

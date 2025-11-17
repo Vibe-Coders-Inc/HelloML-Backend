@@ -210,6 +210,10 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int):
         async def handle_error(error_msg: str):
             print(f"[MediaStream] Realtime API error: {error_msg}", flush=True)
 
+        # Extract greeting and goodbye from agent config
+        greeting = agent_config.get('greeting', 'Hello! How can I help you today?')
+        goodbye = agent_config.get('goodbye', 'Goodbye! Have a great day!')
+
         # Create OpenAI Realtime session
         print(f"[MediaStream] Creating OpenAI Realtime session", flush=True)
         try:
@@ -220,7 +224,9 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int):
                 on_audio=send_audio_to_twilio,
                 on_error=handle_error,
                 twilio_ws=websocket,
-                call_sid=call_sid
+                call_sid=call_sid,
+                greeting=greeting,
+                goodbye=goodbye
             )
             print(f"[MediaStream] Realtime session created successfully", flush=True)
         except Exception as e:
