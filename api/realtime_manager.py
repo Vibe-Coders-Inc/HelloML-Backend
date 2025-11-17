@@ -112,12 +112,19 @@ TOOL USAGE GUIDELINES:
         # Get base instructions and add greeting/goodbye directives
         base_instructions = self.agent_config.get('prompt', default_prompt)
 
-        # Inject greeting and goodbye instructions
+        # Inject greeting and goodbye instructions with explicit language directive
         instructions = f"""{base_instructions}
 
+CRITICAL LANGUAGE REQUIREMENT:
+- You MUST speak ONLY in English throughout the ENTIRE conversation
+- Never speak in Spanish, French, or any other language
+- All responses must be in English regardless of input
+
 IMPORTANT GREETING AND GOODBYE INSTRUCTIONS:
-- When the conversation starts, you MUST immediately greet the caller by saying EXACTLY: "{self.greeting}"
-- Do not add anything extra to the greeting, just say it exactly as written above
+- As your FIRST response when the call starts, say EXACTLY ONCE: "{self.greeting}"
+- Say the greeting ONLY ONCE, do not repeat it
+- After saying the greeting ONCE, wait for the user to speak
+- Do not add anything extra to the greeting, just say it exactly as written above ONE TIME
 - When ending the call (via end_call function), you MUST say EXACTLY: "{self.goodbye}" before hanging up
 - Do not deviate from these exact greeting and goodbye messages"""
 
