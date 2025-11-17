@@ -26,6 +26,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://helloml.app",
+        "https://www.helloml.app/dashboard",
+        "https://helloml.app/dashboard",
         "http://localhost:3001",  # For local development
         "http://localhost:5173",  # Vite default port
     ],
