@@ -109,7 +109,18 @@ TOOL USAGE GUIDELINES:
 - Use transfer_call when: the customer requests to speak with a human, or the issue requires specialized assistance beyond your capabilities
 - Always be polite, professional, and helpful"""
 
-        instructions = self.agent_config.get('prompt', default_prompt)
+        # Get base instructions and add greeting/goodbye directives
+        base_instructions = self.agent_config.get('prompt', default_prompt)
+
+        # Inject greeting and goodbye instructions
+        instructions = f"""{base_instructions}
+
+IMPORTANT GREETING AND GOODBYE INSTRUCTIONS:
+- When the conversation starts, you MUST immediately greet the caller by saying EXACTLY: "{self.greeting}"
+- Do not add anything extra to the greeting, just say it exactly as written above
+- When ending the call (via end_call function), you MUST say EXACTLY: "{self.goodbye}" before hanging up
+- Do not deviate from these exact greeting and goodbye messages"""
+
         voice = self.agent_config.get('voice_model', 'shimmer')
         temperature = self.agent_config.get('temperature', 0.7)
 
@@ -216,73 +227,55 @@ TOOL USAGE GUIDELINES:
 
     async def _send_initial_greeting(self):
         """
-        Send initial greeting message to make the agent speak first.
+        Trigger the agent to speak the greeting.
 
-        This creates a conversation item with the greeting text and triggers
-        a response, so the agent greets the caller immediately when they connect.
+        The greeting text is embedded in the system instructions, so we just
+        need to trigger a response and the model will follow the greeting directive.
         """
         try:
-            # Create conversation item with greeting as assistant message
-            greeting_event = {
-                "type": "conversation.item.create",
-                "item": {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": self.greeting
-                        }
-                    ]
-                }
-            }
-            await self.send_event(greeting_event)
-            print(f"[RealtimeSession] Sent greeting item: {self.greeting}")
-
-            # Trigger response to make the agent speak the greeting
+            # Simply trigger a response - the model will follow the greeting instruction
             response_event = {
                 "type": "response.create"
             }
             await self.send_event(response_event)
-            print(f"[RealtimeSession] Triggered initial greeting response")
+            print(f"[RealtimeSession] Triggered initial greeting (will say: {self.greeting})")
 
         except Exception as e:
-            print(f"[RealtimeSession] Failed to send initial greeting: {e}")
+            print(f"[RealtimeSession] Failed to trigger initial greeting: {e}")
 
     async def _send_goodbye_message(self):
         """
-        Send goodbye message before ending the call.
+        Trigger the agent to say goodbye before ending.
 
-        This creates a conversation item with the goodbye text and triggers
-        a response, so the agent says farewell before the call ends.
+        Since the goodbye directive is in the system instructions, we add a system
+        message to remind the agent to say goodbye, then trigger a response.
         """
         try:
-            # Create conversation item with goodbye as assistant message
-            goodbye_event = {
+            # Add a system reminder to say goodbye
+            reminder_event = {
                 "type": "conversation.item.create",
                 "item": {
                     "type": "message",
-                    "role": "assistant",
+                    "role": "system",
                     "content": [
                         {
                             "type": "input_text",
-                            "text": self.goodbye
+                            "text": "The call is ending. Say your goodbye message to the caller now."
                         }
                     ]
                 }
             }
-            await self.send_event(goodbye_event)
-            print(f"[RealtimeSession] Sent goodbye item: {self.goodbye}")
+            await self.send_event(reminder_event)
 
-            # Trigger response to make the agent speak the goodbye
+            # Trigger response to make the agent say goodbye
             response_event = {
                 "type": "response.create"
             }
             await self.send_event(response_event)
-            print(f"[RealtimeSession] Triggered goodbye response")
+            print(f"[RealtimeSession] Triggered goodbye message (will say: {self.goodbye})")
 
         except Exception as e:
-            print(f"[RealtimeSession] Failed to send goodbye message: {e}")
+            print(f"[RealtimeSession] Failed to trigger goodbye message: {e}")
 
     async def send_audio(self, audio_base64: str):
         """
