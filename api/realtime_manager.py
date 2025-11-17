@@ -90,7 +90,20 @@ class RealtimeSession:
     async def _configure_session(self):
         """Configure the Realtime session with agent settings."""
         # Extract agent configuration
-        instructions = self.agent_config.get('prompt', 'You are a helpful assistant.')
+        default_prompt = """You are a helpful AI voice assistant.
+
+AVAILABLE TOOLS:
+1. search_knowledge_base - Search uploaded documents to find accurate information
+2. end_call - Gracefully end the phone call
+3. transfer_call - Transfer the call to another phone number
+
+TOOL USAGE GUIDELINES:
+- Use search_knowledge_base to find information from uploaded documents before answering questions
+- Use end_call when: the customer asks to hang up, the conversation is complete, or the issue is fully resolved
+- Use transfer_call when: the customer requests to speak with a human, or the issue requires specialized assistance beyond your capabilities
+- Always be polite, professional, and helpful"""
+
+        instructions = self.agent_config.get('prompt', default_prompt)
         voice = self.agent_config.get('voice_model', 'shimmer')
         temperature = self.agent_config.get('temperature', 0.7)
 
