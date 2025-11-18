@@ -25,9 +25,10 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://helloml.app",
-        "http://localhost:3000",  # For local development
-        "http://localhost:5173",  # Vite default port
+        "https://helloml.app",          # Production domain
+        "https://www.helloml.app",      # Production with www
+        "http://localhost:3001",        # Local development
+        "http://localhost:5173",        # Vite dev server
     ],
     allow_credentials=True,
     allow_methods=["*"],

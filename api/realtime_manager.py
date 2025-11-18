@@ -28,6 +28,8 @@ class RealtimeSession:
         on_error: Optional[Callable] = None,
         twilio_ws: Optional[Any] = None,
         call_sid: Optional[str] = None,
+        greeting: Optional[str] = None,
+        goodbye: Optional[str] = None,
     ):
         """
         Initialize Realtime Session.
@@ -41,6 +43,8 @@ class RealtimeSession:
             on_error: Callback for error handling
             twilio_ws: Twilio Media Stream WebSocket connection
             call_sid: Twilio call SID for call control
+            greeting: Initial greeting message to speak when call starts
+            goodbye: Farewell message to speak before call ends
         """
         self.agent_id = agent_id
         self.conversation_id = conversation_id
@@ -50,6 +54,8 @@ class RealtimeSession:
         self.on_error = on_error
         self.twilio_ws = twilio_ws
         self.call_sid = call_sid
+        self.greeting = greeting or "Hello! How can I help you today?"
+        self.goodbye = goodbye or "Goodbye! Have a great day!"
 
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.api_key = os.getenv("OPENAI_API_KEY")
@@ -64,7 +70,7 @@ class RealtimeSession:
 
     async def connect(self):
         """Connect to OpenAI Realtime API and configure session."""
-        url = "wss://api.openai.com/v1/realtime?model=gpt-realtime"
+        url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17"
 
         headers = {
             "Authorization": f"Bearer {self.api_key}"
@@ -90,15 +96,80 @@ class RealtimeSession:
     async def _configure_session(self):
         """Configure the Realtime session with agent settings."""
         # Extract agent configuration
-        instructions = self.agent_config.get('prompt', 'You are a helpful assistant.')
-        voice = self.agent_config.get('voice_model', 'shimmer')
-        temperature = self.agent_config.get('temperature', 0.7)
+        default_prompt = """You are a helpful AI voice assistant.
+
+AVAILABLE TOOLS:
+1. search_knowledge_base - Search uploaded documents to find accurate information
+2. end_call - Gracefully end the phone call
+3. transfer_call - Transfer the call to another phone number
+
+TOOL USAGE GUIDELINES:
+- Use search_knowledge_base to find information from uploaded documents before answering questions
+- Use end_call when: the customer asks to hang up, the conversation is complete, or the issue is fully resolved
+- Use transfer_call when: the customer requests to speak with a human, or the issue requires specialized assistance beyond your capabilities
+- Always be polite, professional, and helpful"""
+
+        # Get base instructions from agent config
+        base_instructions = self.agent_config.get('prompt', default_prompt)
+
+        # Build complete instructions with CRITICAL directives at the top
+        instructions = f"""*** CRITICAL INSTRUCTIONS - FOLLOW EXACTLY ***
+
+1. LANGUAGE: You MUST speak ONLY in English. NEVER use Spanish, French, or any other language under any circumstances.
+
+2. FIRST RESPONSE / GREETING: Your very first words when this call starts MUST be EXACTLY: "{self.greeting}"
+   - Say this greeting immediately and exactly as written
+   - Do NOT add any introduction, do NOT say "hello" or "hi" first
+   - After the greeting, wait for the user to respond
+
+3. KNOWLEDGE BASE SEARCH: BEFORE answering ANY question about business information, policies, products, services, or facts:
+   - You MUST FIRST call the search_knowledge_base tool
+   - Search with relevant keywords from the user's question
+   - THEN provide your answer based ONLY on the search results
+   - If the search returns no results, say you don't have that information
+   - NEVER make up answers - ALWAYS search first
+
+4. GOODBYE: When ending the call, say EXACTLY: "{self.goodbye}"
+
+*** YOUR ROLE ***
+
+{base_instructions}"""
+
+        # Get configuration from agent settings
+        voice = self.agent_config.get('voice_model', 'alloy')
+        temperature = self.agent_config.get('temperature', 0.8)
+        max_tokens = self.agent_config.get('max_response_output_tokens')
+
+        # Turn detection settings from agent config
+        turn_detection_type = self.agent_config.get('turn_detection_type', 'server_vad')
+
+        # Build turn detection config according to OpenAI Realtime API spec
+        turn_detection_config = {
+            "type": turn_detection_type,
+        }
+
+        # Add parameters based on VAD type (following OpenAI API spec)
+        if turn_detection_type == "server_vad":
+            # Server VAD specific parameters
+            turn_detection_config["threshold"] = self.agent_config.get('turn_detection_threshold', 0.5)
+            turn_detection_config["prefix_padding_ms"] = self.agent_config.get('turn_detection_prefix_padding_ms', 300)
+            turn_detection_config["silence_duration_ms"] = self.agent_config.get('turn_detection_silence_duration_ms', 500)  # Lowered to 500ms for better responsiveness and interruption
+            turn_detection_config["create_response"] = self.agent_config.get('turn_detection_create_response', True)
+            turn_detection_config["interrupt_response"] = self.agent_config.get('turn_detection_interrupt_response', True)  # Ensures user can interrupt
+
+        elif turn_detection_type == "semantic_vad":
+            # Semantic VAD specific parameters
+            turn_detection_config["eagerness"] = self.agent_config.get('turn_detection_eagerness', 'medium')  # Medium eagerness for balanced response
+            turn_detection_config["prefix_padding_ms"] = self.agent_config.get('turn_detection_prefix_padding_ms', 300)
+            turn_detection_config["silence_duration_ms"] = self.agent_config.get('turn_detection_silence_duration_ms', 500)  # Lowered for better responsiveness
+            turn_detection_config["create_response"] = self.agent_config.get('turn_detection_create_response', True)
+            turn_detection_config["interrupt_response"] = self.agent_config.get('turn_detection_interrupt_response', True)  # Ensures user can interrupt
 
         session_config = {
             "type": "session.update",
             "session": {
-                "type": "realtime",
-                "model": "gpt-realtime",
+                "model": "gpt-4o-realtime-preview-2024-12-17",
+                "modalities": ["text", "audio"],
                 "instructions": instructions,
                 "audio": {
                     "input": {
@@ -113,11 +184,7 @@ class RealtimeSession:
                     "model": "whisper-1"
                 },
                 "temperature": temperature,
-                "turn_detection": {
-                    "type": "semantic_vad",
-                    "eagerness": "medium",
-                    "interrupt_response": True
-                },
+                "turn_detection": turn_detection_config,
                 "tools": [
                     self._get_rag_tool_definition(),
                     self._get_end_call_tool_definition(),
@@ -126,8 +193,15 @@ class RealtimeSession:
             }
         }
 
+        # Add max_response_output_tokens if specified
+        if max_tokens is not None:
+            session_config["session"]["max_response_output_tokens"] = max_tokens
+
         await self.send_event(session_config)
         print(f"[RealtimeSession] Session configured with voice={voice}, temp={temperature}")
+
+        # Trigger the initial greeting by sending a silent user message
+        await self._trigger_initial_greeting()
 
     def _get_rag_tool_definition(self) -> Dict[str, Any]:
         """Get the RAG semantic search function tool definition."""
@@ -191,6 +265,74 @@ class RealtimeSession:
                 "required": ["phone_number"]
             }
         }
+
+    async def _trigger_initial_greeting(self):
+        """
+        Trigger the agent to speak the greeting by sending a fake user input.
+
+        The OpenAI Realtime API with server VAD waits for user input before responding.
+        We send a minimal user message to trigger the agent's first response (the greeting).
+        """
+        try:
+            # Send a conversation item as if the user connected/said hello
+            greeting_trigger = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "[Call connected]"
+                        }
+                    ]
+                }
+            }
+            await self.send_event(greeting_trigger)
+
+            # Trigger the assistant to respond with the greeting
+            response_event = {
+                "type": "response.create"
+            }
+            await self.send_event(response_event)
+            print(f"[RealtimeSession] Triggered initial greeting")
+
+        except Exception as e:
+            print(f"[RealtimeSession] Failed to trigger initial greeting: {e}")
+
+    async def _send_goodbye_message(self):
+        """
+        Trigger the agent to say goodbye before ending.
+
+        Since the goodbye directive is in the system instructions, we add a system
+        message to remind the agent to say goodbye, then trigger a response.
+        """
+        try:
+            # Add a system reminder to say goodbye
+            reminder_event = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "The call is ending. Say your goodbye message to the caller now."
+                        }
+                    ]
+                }
+            }
+            await self.send_event(reminder_event)
+
+            # Trigger response to make the agent say goodbye
+            response_event = {
+                "type": "response.create"
+            }
+            await self.send_event(response_event)
+            print(f"[RealtimeSession] Triggered goodbye message (will say: {self.goodbye})")
+
+        except Exception as e:
+            print(f"[RealtimeSession] Failed to trigger goodbye message: {e}")
 
     async def send_audio(self, audio_base64: str):
         """
@@ -393,6 +535,12 @@ class RealtimeSession:
         """End the current phone call gracefully."""
         try:
             print(f"[EndCall] Ending call. Reason: {reason}")
+
+            # Send goodbye message before ending call
+            await self._send_goodbye_message()
+
+            # Wait briefly for goodbye audio to play (approximately 3 seconds for typical goodbye message)
+            await asyncio.sleep(3)
 
             # Close Twilio WebSocket connection
             if self.twilio_ws:

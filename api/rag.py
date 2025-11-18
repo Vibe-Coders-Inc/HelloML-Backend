@@ -74,7 +74,7 @@ def upsert_document_text(sb, ai, agent_id, filename, text,
         "filename": filename,
         "storage_url": storage_url,
         "file_type": file_type
-    }, on_conflict="agent_id,filename").select("id").execute()
+    }, on_conflict="agent_id,filename").execute()
 
     if not doc_res.data:
         raise RuntimeError("Failed to insert document row.")
