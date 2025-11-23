@@ -28,9 +28,9 @@ class AgentCreate(BaseModel):
     business_id: int
     area_code: str
     name: Optional[str] = "Agent"
-    model_type: Optional[str] = "gpt-4o-mini"  # Changed to valid OpenAI Realtime model
+    model_type: Optional[str] = "gpt-realtime-2025-08-28"  # Latest GA model for Realtime API
     temperature: Optional[float] = 0.7
-    voice_model: Optional[str] = "nova"  # Changed from "Joanna" to valid OpenAI voice
+    voice_model: Optional[str] = "nova"  # Valid OpenAI Realtime voice
     prompt: Optional[str] = None
     greeting: Optional[str] = "Hello There!"
     goodbye: Optional[str] = "Goodbye and take care!"
@@ -206,15 +206,25 @@ async def update_agent(agent_id: int, agent: AgentUpdate):
 
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields to update")
-        
+
+        # Log warning if prompt is explicitly set to empty string
+        if 'prompt' in update_data and (update_data['prompt'] is None or update_data['prompt'].strip() == ''):
+            print(f"[WARNING] Agent {agent_id}: Prompt set to empty. Will use default prompt during calls.")
+
+        # Log configuration updates for debugging
+        print(f"[Agent Update] Agent {agent_id}: Updating fields: {list(update_data.keys())}")
+
         update_data['updated_at'] = 'now()'
-        
+
         result = db.table('agent').update(update_data).eq('id', agent_id).execute()
-        
+
         if not result.data:
             raise HTTPException(status_code=404, detail="Agent not found")
-        
-        return result.data[0]
+
+        updated_agent = result.data[0]
+        print(f"[Agent Update] Agent {agent_id}: Update successful")
+
+        return updated_agent
         
     except HTTPException:
         raise

@@ -35,7 +35,7 @@ async def handle_incoming_call(agent_id: int, request: Request):
         agent_data = db.table('agent').select('*').eq('id', agent_id).single().execute()
         if not agent_data.data:
             return Response(
-                content='<Response><Say voice="Polly.Joanna">Agent not found.</Say><Hangup/></Response>',
+                content='<Response><Say>Agent not found.</Say><Hangup/></Response>',
                 media_type="application/xml"
             )
 
@@ -76,7 +76,7 @@ async def handle_incoming_call(agent_id: int, request: Request):
     except Exception as e:
         print(f"[TwilioWebhook] Error: {e}")
         return Response(
-            content='<Response><Say voice="Polly.Joanna">Sorry, there was an error.</Say><Hangup/></Response>',
+            content='<Response><Say>Sorry, there was an error.</Say><Hangup/></Response>',
             media_type="application/xml"
         )
 

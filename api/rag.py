@@ -68,17 +68,30 @@ def upsert_document_text(sb, ai, agent_id, filename, text,
       {"document_id": int, "chunks": int}
     """
 
-    # Upsert document
-    doc_res = sb.table("document").upsert({
-        "agent_id": agent_id,
-        "filename": filename,
-        "storage_url": storage_url,
-        "file_type": file_type
-    }, on_conflict="agent_id,filename").execute()
+    # Insert document (or update if unique constraint exists)
+    # Check if document already exists for this agent + filename
+    existing_doc = sb.table("document").select("id").eq("agent_id", agent_id).eq("filename", filename).execute()
 
-    if not doc_res.data:
-        raise RuntimeError("Failed to insert document row.")
-    doc_id = doc_res.data[0]["id"]
+    if existing_doc.data:
+        # Update existing document
+        doc_id = existing_doc.data[0]["id"]
+        sb.table("document").update({
+            "storage_url": storage_url,
+            "file_type": file_type,
+            "updated_at": "now()"
+        }).eq("id", doc_id).execute()
+    else:
+        # Insert new document
+        doc_res = sb.table("document").insert({
+            "agent_id": agent_id,
+            "filename": filename,
+            "storage_url": storage_url,
+            "file_type": file_type
+        }).execute()
+
+        if not doc_res.data:
+            raise RuntimeError("Failed to insert document row.")
+        doc_id = doc_res.data[0]["id"]
 
     # Split text into smaller chunks
     chunks = chunk_text(text)
