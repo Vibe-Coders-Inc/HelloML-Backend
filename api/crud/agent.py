@@ -13,7 +13,7 @@ class AgentCreate(BaseModel):
     business_id: int
     area_code: str
     name: Optional[str] = "Agent"
-    model_type: Optional[str] = "gpt-realtime-2025-08-28"  # Latest GA model for Realtime API
+    model_type: Optional[str] = "gpt-realtime-2025-08-28"  # Latest model for Realtime API
     temperature: Optional[float] = 0.7
     prompt: Optional[str] = None
     greeting: Optional[str] = "Hello There!"
