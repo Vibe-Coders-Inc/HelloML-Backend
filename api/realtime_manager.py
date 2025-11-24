@@ -184,10 +184,8 @@ class RealtimeSession:
                                 - Be conversational and natural while following these instructions
                                 - If unsure, search the knowledge base or transfer to a human"""
 
-        # Get configuration from agent settings (ONLY what's needed)
+        # Get configuration from agent settings
         model = self.agent_config.get('model_type') or 'gpt-realtime-2025-08-28'
-        voice = self.agent_config.get('voice_model', 'alloy')
-        temperature = self.agent_config.get('temperature', 0.8)
 
         session_config = {
             "type": "session.update",
@@ -204,7 +202,7 @@ class RealtimeSession:
         }
 
         await self.send_event(session_config)
-        print(f"[RealtimeSession] Session configured with model={model}, voice={voice}, temp={temperature}")
+        print(f"[RealtimeSession] Session configured with model={model}")
 
         # Trigger the initial greeting by sending a silent user message
         await self._trigger_initial_greeting()
@@ -418,7 +416,7 @@ class RealtimeSession:
             self.current_agent_transcript = ""
 
         # Function call requested
-        elif event_type == "conversation.item.created":
+        elif event_type == "response.output_item.done":
             item = event.get("item", {})
             if item.get("type") == "function_call":
                 await self._handle_function_call(item)
