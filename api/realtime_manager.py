@@ -192,21 +192,12 @@ class RealtimeSession:
         session_config = {
             "type": "session.update",
             "session": {
-                "type": "realtime",  # Required in GA API
+                "type": "realtime",
                 "instructions": instructions,
-                "voice": voice,
-                "input_audio_format": "pcm16",
-                "output_audio_format": "pcm16",
-                "input_audio_transcription": {
-                    "model": "whisper-1"
+                "audio": {
+                    "voice": voice,
+                    "format": "pcm16"
                 },
-                "turn_detection": {
-                    "type": "server_vad",
-                    "threshold": 0.5,
-                    "prefix_padding_ms": 300,
-                    "silence_duration_ms": 200
-                },
-                "temperature": temperature,
                 "tools": [
                     self._get_rag_tool_definition(),
                     self._get_end_call_tool_definition(),
