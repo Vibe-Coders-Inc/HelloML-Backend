@@ -104,12 +104,10 @@ class RealtimeSession:
                             AVAILABLE TOOLS:
                             1. search_knowledge_base - Search uploaded documents to find accurate information
                             2. end_call - End the phone call
-                            3. transfer_call - Transfer the call to another phone number
 
                             TOOL USAGE GUIDELINES:
                             - Use search_knowledge_base to find information from uploaded documents before answering questions
                             - Use end_call when: the customer asks to hang up, the conversation is complete, or the issue is fully resolved
-                            - Use transfer_call when: the customer requests to speak with a human, or the issue requires specialized assistance beyond your capabilities
                             - Always be polite, professional, and helpful"""
 
         # Get base instructions from agent config
@@ -156,15 +154,7 @@ class RealtimeSession:
                                     - Attempt 2: Use synonyms (e.g., "iced coffee" → "cold coffee", "coffee beverage")
                                     - Attempt 3: Use category terms (e.g., "drinks", "beverages", "menu items")
 
-                                B. transfer_call - Transfer caller to a human
-                                    WHEN TO USE:
-                                    - (Don't Use Yet this is too much to build for now lol)
-
-                                    HOW TO USE:
-                                    - Call transfer_call(phone_number="business phone", reason="brief explanation")
-                                    - Example: transfer_call(phone_number="+1234567890", reason="Customer requests manager")
-
-                                C. end_call - End the conversation gracefully
+                                B. end_call - End the conversation gracefully
                                     WHEN TO USE:
                                     - Customer says goodbye, "that's all", "thank you bye", etc.
                                     - Issue is fully resolved and customer seems satisfied
@@ -199,8 +189,7 @@ class RealtimeSession:
                 "instructions": instructions,
                 "tools": [
                     self._get_rag_tool_definition(),
-                    self._get_end_call_tool_definition(),
-                    self._get_transfer_call_tool_definition()
+                    self._get_end_call_tool_definition()
                 ],
                 "tool_choice": "auto"
             }
@@ -252,8 +241,6 @@ class RealtimeSession:
                 "required": []
             }
         }
-
-    def _get_transfer_call_tool_definition(self) -> Dict[str, Any]:
         """Get the transfer_call function tool definition."""
         return {
             "type": "function",
