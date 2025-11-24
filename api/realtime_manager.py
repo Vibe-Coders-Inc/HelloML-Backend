@@ -192,6 +192,7 @@ class RealtimeSession:
         session_config = {
             "type": "session.update",
             "session": {
+                "type": "realtime",  # Required in GA API
                 "modalities": ["text", "audio"],
                 "instructions": instructions,
                 "voice": voice,
@@ -211,7 +212,8 @@ class RealtimeSession:
                     self._get_rag_tool_definition(),
                     self._get_end_call_tool_definition(),
                     self._get_transfer_call_tool_definition()
-                ]
+                ],
+                "tool_choice": "auto"
             }
         }
 
