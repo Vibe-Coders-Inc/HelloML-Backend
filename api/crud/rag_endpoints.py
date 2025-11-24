@@ -30,7 +30,7 @@ class TextDocumentIn(BaseModel):
 class SearchRequest(BaseModel):
     agent_id: int
     query: str
-    k: Optional[int] = 8
+    k: Optional[int] = 10
     min_similarity: Optional[float] = 0.7
 
 def ensure_agent_exists(db, agent_id: int):
