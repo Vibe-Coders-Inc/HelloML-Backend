@@ -2,7 +2,7 @@
 
 EMBED_MODEL = "text-embedding-3-small"   # 1536 dims
 
-def chunk_text(text, chunk_size=1000, overlap=200):
+def chunk_text(text, chunk_size=3000, overlap=500):
     """
     Breaks text into overlapping chunks so embeddings preserve context.
     Example:
@@ -57,12 +57,6 @@ def upsert_document_text(sb, ai, agent_id, filename, text,
                               storage_url="", file_type="text/plain"):
     """
     Adds a new document and its vectorized chunks to the database.
-
-    Steps:
-      1. Insert a document record (linked to an agent).
-      2. Split the text into overlapping chunks.
-      3. Create embeddings for each chunk.
-      4. Insert chunks + embeddings into 'document_chunk'.
 
     Returns:
       {"document_id": int, "chunks": int}
@@ -126,14 +120,9 @@ def upsert_document_text(sb, ai, agent_id, filename, text,
     return {"document_id": doc_id, "chunks": len(to_insert)}
 
 
-def semantic_search(sb, ai, agent_id, query, k=8, min_similarity=0.70):
+def semantic_search(sb, ai, agent_id, query, k=10, min_similarity=0.3):
     """
     Finds the most semantically similar chunks for a given query.
-
-    Steps:
-      1. Embed the query text.
-      2. Call Postgres RPC 'match_document_chunks' for that agent.
-      3. Return the most relevant chunks.
     """
     # Create query embedding
     q_emb_list = embed_texts(ai, [query]) # pass in query as a list of 1 string (customer stt)
