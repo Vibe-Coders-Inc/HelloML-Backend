@@ -103,7 +103,7 @@ class RealtimeSession:
 
                             AVAILABLE TOOLS:
                             1. search_knowledge_base - Search uploaded documents to find accurate information
-                            2. end_call - Gracefully end the phone call
+                            2. end_call - End the phone call
                             3. transfer_call - Transfer the call to another phone number
 
                             TOOL USAGE GUIDELINES:
@@ -116,7 +116,7 @@ class RealtimeSession:
         # Use 'or' to handle empty strings, not just None
         base_instructions = self.agent_config.get('prompt') or default_prompt
 
-        # Build complete instructions with CRITICAL directives at the top
+        # Build complete instructions with directives at the top
         instructions = f"""*** CRITICAL INSTRUCTIONS - FOLLOW EXACTLY ***
 
                                 1. LANGUAGE: You MUST speak ONLY in English. NEVER use Spanish, French, or any other language under any circumstances UNLESS YOU ARE GETTING RESPONSES IN THAT LANGUAGE.
@@ -128,34 +128,37 @@ class RealtimeSession:
 
                                 3. FUNCTION CALLING - YOU HAVE ACCESS TO THREE TOOLS THAT YOU MUST USE:
 
-                                A. search_knowledge_base - USE THIS TOOL FIRST BEFORE ANSWERING QUESTIONS
-                                    WHEN TO USE:
-                                    - Customer asks about hours of operation
-                                    - Customer asks about products, services, menu items, pricing
-                                    - Customer asks about policies (refund, cancellation, etc.)
-                                    - Customer asks about location, contact info, or business details
-                                    - ANY factual question about the business
+                                A. search_knowledge_base - *** ABSOLUTE REQUIREMENT: SEARCH BEFORE EVERY ANSWER ***
 
-                                    HOW TO USE:
-                                    - Extract key terms from the customer's question
-                                    - Call search_knowledge_base(query="relevant search terms")
-                                    - Wait for results
-                                    - Answer ONLY based on the search results
-                                    - If search returns nothing, say "I don't have that information available"
-                                    - NEVER make up information - ALWAYS search first
+                                    *** YOU ARE STRICTLY PROHIBITED FROM: ***
+                                    - Using your general knowledge or training data
+                                    - Making assumptions based on common sense
+                                    - Answering ANY question without searching first
+                                    - Giving up after one failed search
 
-                                    EXAMPLE:
-                                    Customer: "What time do you close on Sundays?"
-                                    You: [Call search_knowledge_base(query="hours Sunday closing")]
-                                    You: [Read results and respond with actual hours]
+                                    *** MANDATORY SEARCH PROTOCOL: ***
+
+                                    RULE 1: SEARCH FIRST, ALWAYS
+                                    Before answering ANY customer question (except greetings/small talk), you MUST:
+                                    1. Call search_knowledge_base with the customer's key terms
+                                    2. If no results: Try AGAIN with DIFFERENT search terms (synonyms, broader terms)
+                                    3. If still no results: Try a THIRD time with simplified keywords
+                                    4. Only after 3 failed searches may you say "I don't have that information in my knowledge base. Let me transfer you to someone who can help." Then offer transfer_call
+
+                                    RULE 2: UPLOADED DOCUMENTS = ONLY SOURCE OF TRUTH
+                                    - Search results are the HOLY GRAIL - the ONLY source you can use
+                                    - NEVER use your general knowledge about businesses, menus, or products
+                                    - If it's not in the search results, you DON'T know it
+                                    - Even if you "know" something from training, IGNORE IT - only use search results
+
+                                    RULE 3: SEARCH STRATEGY (try IN ORDER)
+                                    - Attempt 1: Use exact words from customer's question
+                                    - Attempt 2: Use synonyms (e.g., "iced coffee" → "cold coffee", "coffee beverage")
+                                    - Attempt 3: Use category terms (e.g., "drinks", "beverages", "menu items")
 
                                 B. transfer_call - Transfer caller to a human
                                     WHEN TO USE:
-                                    - Customer explicitly asks to speak with a person/manager/staff
-                                    - Issue requires human judgment or authority
-                                    - Customer is frustrated or upset
-                                    - Problem is outside your knowledge base
-                                    - Customer needs specialized help you cannot provide
+                                    - (Don't Use Yet this is too much to build for now lol)
 
                                     HOW TO USE:
                                     - Call transfer_call(phone_number="business phone", reason="brief explanation")
@@ -179,10 +182,12 @@ class RealtimeSession:
                                 {base_instructions}
 
                                 *** REMEMBER ***
-                                - ALWAYS search the knowledge base BEFORE answering factual questions
-                                - NEVER make up information - use tools to find accurate answers
-                                - Be conversational and natural while following these instructions
-                                - If unsure, search the knowledge base or transfer to a human"""
+                                - SEARCH 3 TIMES MINIMUM before saying "I don't have that information"
+                                - TRY DIFFERENT KEYWORDS: exact terms → synonyms → categories
+                                - UPLOADED DOCUMENTS = ONLY SOURCE - never use general knowledge or training data
+                                - If 3 searches fail, offer to transfer_call to a human who can help
+                                - Every factual answer MUST come from search_knowledge_base results
+                                - Be conversational and natural while following these strict search requirements"""
 
         # Get configuration from agent settings
         model = self.agent_config.get('model_type') or 'gpt-realtime-2025-08-28'
@@ -212,7 +217,7 @@ class RealtimeSession:
         return {
             "type": "function",
             "name": "search_knowledge_base",
-            "description": "Search the business's knowledge base (documents, FAQs, policies) for relevant information to answer customer questions accurately.",
+            "description": "MANDATORY: Search uploaded documents - the ONLY source of truth. MUST be called before answering ANY factual question about the business. Call multiple times with different queries if first search fails. NEVER answer without searching first.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -222,8 +227,8 @@ class RealtimeSession:
                     },
                     "k": {
                         "type": "integer",
-                        "description": "Number of relevant chunks to return (default: 5)",
-                        "default": 5
+                        "description": "Number of relevant chunks to return (default: 10)",
+                        "default": 10
                     }
                 },
                 "required": ["query"]
@@ -491,7 +496,7 @@ class RealtimeSession:
             }
             await self.send_event(error_event)
 
-    async def _execute_rag_search(self, query: str, k: int = 5) -> Dict[str, Any]:
+    async def _execute_rag_search(self, query: str, k: int = 10) -> Dict[str, Any]:
         """Execute semantic search in RAG knowledge base."""
         try:
             db = supabase()
@@ -504,7 +509,7 @@ class RealtimeSession:
                 agent_id=self.agent_id,
                 query=query,
                 k=k,
-                min_similarity=0.6
+                min_similarity=0.5
             )
 
             if not matches:
