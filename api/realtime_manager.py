@@ -193,7 +193,6 @@ class RealtimeSession:
             "type": "session.update",
             "session": {
                 "type": "realtime",  # Required in GA API
-                "modalities": ["text", "audio"],
                 "instructions": instructions,
                 "voice": voice,
                 "input_audio_format": "pcm16",
