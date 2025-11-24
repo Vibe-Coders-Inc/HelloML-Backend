@@ -194,10 +194,6 @@ class RealtimeSession:
             "session": {
                 "type": "realtime",
                 "instructions": instructions,
-                "audio": {
-                    "voice": voice,
-                    "format": "pcm16"
-                },
                 "tools": [
                     self._get_rag_tool_definition(),
                     self._get_end_call_tool_definition(),
