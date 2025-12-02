@@ -30,7 +30,7 @@ class TextDocumentIn(BaseModel):
 class SearchRequest(BaseModel):
     agent_id: int
     query: str
-    k: Optional[int] = 8
+    k: Optional[int] = 10
     min_similarity: Optional[float] = 0.7
 
 def ensure_agent_exists(db, agent_id: int):
@@ -41,6 +41,7 @@ def ensure_agent_exists(db, agent_id: int):
 @router.post("/documents/text", summary="Upsert document table with plain text")
 async def create_text_document(body: TextDocumentIn):
     try:
+        print(f"[RAG] Uploading text document '{body.filename}' for agent {body.agent_id}")
         db = supabase()
         ensure_agent_exists(db, body.agent_id)
 
@@ -53,6 +54,7 @@ async def create_text_document(body: TextDocumentIn):
             file_type=body.file_type or "text/plain",
             storage_url=body.storage_url or ""
         )
+        print(f"[RAG] Successfully created document {result['document_id']} with {result['chunks']} chunks")
         return {
             "success": True,
             "document_id": result["document_id"],
@@ -71,6 +73,7 @@ async def create_pdf_document(
     filename: Optional[str] = Form(None),
 ):
     try:
+        print(f"[RAG] Uploading PDF document for agent {agent_id}")
         if "pdf" not in (file.content_type or "").lower():
             raise HTTPException(status_code=400, detail="Only PDF files are supported.")
         db = supabase()
@@ -83,6 +86,7 @@ async def create_pdf_document(
             raise HTTPException(status_code=400, detail="No text could be extracted from the PDF.")
 
         final_name = filename or file.filename or "uploaded.pdf"
+        print(f"[RAG] Processing PDF '{final_name}' with {len(full_text)} characters")
         result = upsert_document_text(
             db,
             ai,
@@ -92,6 +96,7 @@ async def create_pdf_document(
             file_type="application/pdf",
             storage_url=""
         )
+        print(f"[RAG] Successfully created document {result['document_id']} with {result['chunks']} chunks")
         return {
             "success": True,
             "document_id": result["document_id"],

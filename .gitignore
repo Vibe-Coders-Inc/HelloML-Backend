@@ -1,2 +1,6 @@
 .env
+.claude
 __pycache__/
+
+# Semantic search configuration
+.envrc

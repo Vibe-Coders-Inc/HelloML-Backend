@@ -9,28 +9,12 @@ from ..database import supabase
 
 router = APIRouter(prefix="/agent", tags=["Agent"])
 
-# Valid OpenAI Realtime API voice models
-VALID_VOICE_MODELS = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
-
-def validate_voice_model(voice_model: Optional[str]) -> None:
-    """
-    Validate that the voice model is compatible with OpenAI Realtime API.
-
-    Raises HTTPException if invalid.
-    """
-    if voice_model and voice_model not in VALID_VOICE_MODELS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid voice_model '{voice_model}'. Must be one of: {', '.join(VALID_VOICE_MODELS)}"
-        )
-
 class AgentCreate(BaseModel):
     business_id: int
     area_code: str
     name: Optional[str] = "Agent"
-    model_type: Optional[str] = "gpt-4o-mini"  # Changed to valid OpenAI Realtime model
+    model_type: Optional[str] = "gpt-realtime-2025-08-28"  # Latest model for Realtime API
     temperature: Optional[float] = 0.7
-    voice_model: Optional[str] = "nova"  # Changed from "Joanna" to valid OpenAI voice
     prompt: Optional[str] = None
     greeting: Optional[str] = "Hello There!"
     goodbye: Optional[str] = "Goodbye and take care!"
@@ -39,7 +23,6 @@ class AgentUpdate(BaseModel):
     name: Optional[str] = None
     model_type: Optional[str] = None
     temperature: Optional[float] = None
-    voice_model: Optional[str] = None
     prompt: Optional[str] = None
     greeting: Optional[str] = None
     goodbye: Optional[str] = None
@@ -92,9 +75,6 @@ async def provision_phone_for_agent(agent_id: int, area_code: str):
 async def create_agent(agent: AgentCreate):
     """Creates agent and provisions phone number"""
     try:
-        # Validate voice model before creating agent
-        validate_voice_model(agent.voice_model)
-
         db = supabase()
 
         business_id = agent.business_id
@@ -116,7 +96,6 @@ async def create_agent(agent: AgentCreate):
             'name': agent.name,
             'model_type': agent.model_type,
             'temperature': agent.temperature,
-            'voice_model': agent.voice_model,
             'prompt': agent.prompt,
             'greeting': agent.greeting,
             'goodbye': agent.goodbye,
@@ -196,9 +175,6 @@ async def get_agent_by_business(business_id: int):
 async def update_agent(agent_id: int, agent: AgentUpdate):
     """Updates agent configuration"""
     try:
-        # Validate voice model if provided
-        validate_voice_model(agent.voice_model)
-
         db = supabase()
 
         # Only update fields that are provided
@@ -206,15 +182,25 @@ async def update_agent(agent_id: int, agent: AgentUpdate):
 
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields to update")
-        
+
+        # Log warning if prompt is explicitly set to empty string
+        if 'prompt' in update_data and (update_data['prompt'] is None or update_data['prompt'].strip() == ''):
+            print(f"[WARNING] Agent {agent_id}: Prompt set to empty. Will use default prompt during calls.")
+
+        # Log configuration updates for debugging
+        print(f"[Agent Update] Agent {agent_id}: Updating fields: {list(update_data.keys())}")
+
         update_data['updated_at'] = 'now()'
-        
+
         result = db.table('agent').update(update_data).eq('id', agent_id).execute()
-        
+
         if not result.data:
             raise HTTPException(status_code=404, detail="Agent not found")
-        
-        return result.data[0]
+
+        updated_agent = result.data[0]
+        print(f"[Agent Update] Agent {agent_id}: Update successful")
+
+        return updated_agent
         
     except HTTPException:
         raise

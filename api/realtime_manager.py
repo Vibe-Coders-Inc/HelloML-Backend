@@ -70,7 +70,10 @@ class RealtimeSession:
 
     async def connect(self):
         """Connect to OpenAI Realtime API and configure session."""
-        url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17"
+        # Get model from agent config, use latest GA model as default
+        model = self.agent_config.get('model_type') or 'gpt-realtime-2025-08-28'
+
+        url = f"wss://api.openai.com/v1/realtime?model={model}"
 
         headers = {
             "Authorization": f"Bearer {self.api_key}"
@@ -79,7 +82,7 @@ class RealtimeSession:
         try:
             self.ws = await websockets.connect(url, additional_headers=headers)
             self.running = True
-            print(f"[RealtimeSession] Connected for conversation {self.conversation_id}")
+            print(f"[RealtimeSession] Connected for conversation {self.conversation_id} with model={model}")
 
             # Send session configuration
             await self._configure_session()
@@ -98,107 +101,102 @@ class RealtimeSession:
         # Extract agent configuration
         default_prompt = """You are a helpful AI voice assistant.
 
-AVAILABLE TOOLS:
-1. search_knowledge_base - Search uploaded documents to find accurate information
-2. end_call - Gracefully end the phone call
-3. transfer_call - Transfer the call to another phone number
+                            AVAILABLE TOOLS:
+                            1. search_knowledge_base - Search uploaded documents to find accurate information
+                            2. end_call - End the phone call
 
-TOOL USAGE GUIDELINES:
-- Use search_knowledge_base to find information from uploaded documents before answering questions
-- Use end_call when: the customer asks to hang up, the conversation is complete, or the issue is fully resolved
-- Use transfer_call when: the customer requests to speak with a human, or the issue requires specialized assistance beyond your capabilities
-- Always be polite, professional, and helpful"""
+                            TOOL USAGE GUIDELINES:
+                            - Use search_knowledge_base to find information from uploaded documents before answering questions
+                            - Use end_call when: the customer asks to hang up, the conversation is complete, or the issue is fully resolved
+                            - Always be polite, professional, and helpful"""
 
         # Get base instructions from agent config
-        base_instructions = self.agent_config.get('prompt', default_prompt)
+        # Use 'or' to handle empty strings, not just None
+        base_instructions = self.agent_config.get('prompt') or default_prompt
 
-        # Build complete instructions with CRITICAL directives at the top
+        # Build complete instructions with directives at the top
         instructions = f"""*** CRITICAL INSTRUCTIONS - FOLLOW EXACTLY ***
 
-1. LANGUAGE: You MUST speak ONLY in English. NEVER use Spanish, French, or any other language under any circumstances.
+                                1. LANGUAGE: You MUST speak ONLY in English. NEVER use Spanish, French, or any other language under any circumstances UNLESS YOU ARE GETTING RESPONSES IN THAT LANGUAGE.
 
-2. FIRST RESPONSE / GREETING: Your very first words when this call starts MUST be EXACTLY: "{self.greeting}"
-   - Say this greeting immediately and exactly as written
-   - Do NOT add any introduction, do NOT say "hello" or "hi" first
-   - After the greeting, wait for the user to respond
+                                2. FIRST RESPONSE / GREETING: Your very first words when this call starts MUST be EXACTLY: "{self.greeting}"
+                                - Say this greeting immediately and exactly as written
+                                - Do NOT add any introduction, do NOT say "hello" or "hi" first
+                                - After the greeting, wait for the user to respond
 
-3. KNOWLEDGE BASE SEARCH: BEFORE answering ANY question about business information, policies, products, services, or facts:
-   - You MUST FIRST call the search_knowledge_base tool
-   - Search with relevant keywords from the user's question
-   - THEN provide your answer based ONLY on the search results
-   - If the search returns no results, say you don't have that information
-   - NEVER make up answers - ALWAYS search first
+                                3. FUNCTION CALLING - YOU HAVE ACCESS TO THREE TOOLS THAT YOU MUST USE:
 
-4. GOODBYE: When ending the call, say EXACTLY: "{self.goodbye}"
+                                A. search_knowledge_base - *** ABSOLUTE REQUIREMENT: SEARCH BEFORE EVERY ANSWER ***
 
-*** YOUR ROLE ***
+                                    *** YOU ARE STRICTLY PROHIBITED FROM: ***
+                                    - Using your general knowledge or training data
+                                    - Making assumptions based on common sense
+                                    - Answering ANY question without searching first
+                                    - Giving up after one failed search
 
-{base_instructions}"""
+                                    *** MANDATORY SEARCH PROTOCOL: ***
+
+                                    RULE 1: SEARCH FIRST, ALWAYS
+                                    Before answering ANY customer question (except greetings/small talk), you MUST:
+                                    1. Call search_knowledge_base with the customer's key terms
+                                    2. If no results: Try AGAIN with DIFFERENT search terms (synonyms, broader terms)
+                                    3. If still no results: Try a THIRD time with simplified keywords
+                                    4. Only after 3 failed searches may you say "I don't have that information in my knowledge base. Let me transfer you to someone who can help." Then offer transfer_call
+
+                                    RULE 2: UPLOADED DOCUMENTS = ONLY SOURCE OF TRUTH
+                                    - Search results are the HOLY GRAIL - the ONLY source you can use
+                                    - NEVER use your general knowledge about businesses, menus, or products
+                                    - If it's not in the search results, you DON'T know it
+                                    - Even if you "know" something from training, IGNORE IT - only use search results
+
+                                    RULE 3: SEARCH STRATEGY (try IN ORDER)
+                                    - Attempt 1: Use exact words from customer's question
+                                    - Attempt 2: Use synonyms (e.g., "iced coffee" → "cold coffee", "coffee beverage")
+                                    - Attempt 3: Use category terms (e.g., "drinks", "beverages", "menu items")
+
+                                B. end_call - End the conversation gracefully
+                                    WHEN TO USE:
+                                    - Customer says goodbye, "that's all", "thank you bye", etc.
+                                    - Issue is fully resolved and customer seems satisfied
+                                    - Customer explicitly says they want to hang up
+
+                                    HOW TO USE:
+                                    - Call end_call(reason="brief explanation")
+                                    - Example: end_call(reason="Customer inquiry resolved")
+                                    - The goodbye message will be said automatically
+
+                                4. GOODBYE: When ending the call, say EXACTLY: "{self.goodbye}"
+
+                                *** YOUR ROLE ***
+
+                                {base_instructions}
+
+                                *** REMEMBER ***
+                                - SEARCH 3 TIMES MINIMUM before saying "I don't have that information"
+                                - TRY DIFFERENT KEYWORDS: exact terms → synonyms → categories
+                                - UPLOADED DOCUMENTS = ONLY SOURCE - never use general knowledge or training data
+                                - If 3 searches fail, offer to transfer_call to a human who can help
+                                - Every factual answer MUST come from search_knowledge_base results
+                                - Be conversational and natural while following these strict search requirements"""
 
         # Get configuration from agent settings
-        voice = self.agent_config.get('voice_model', 'alloy')
-        temperature = self.agent_config.get('temperature', 0.8)
-        max_tokens = self.agent_config.get('max_response_output_tokens')
-
-        # Turn detection settings from agent config
-        turn_detection_type = self.agent_config.get('turn_detection_type', 'server_vad')
-
-        # Build turn detection config according to OpenAI Realtime API spec
-        turn_detection_config = {
-            "type": turn_detection_type,
-        }
-
-        # Add parameters based on VAD type (following OpenAI API spec)
-        if turn_detection_type == "server_vad":
-            # Server VAD specific parameters
-            turn_detection_config["threshold"] = self.agent_config.get('turn_detection_threshold', 0.5)
-            turn_detection_config["prefix_padding_ms"] = self.agent_config.get('turn_detection_prefix_padding_ms', 300)
-            turn_detection_config["silence_duration_ms"] = self.agent_config.get('turn_detection_silence_duration_ms', 500)  # Lowered to 500ms for better responsiveness and interruption
-            turn_detection_config["create_response"] = self.agent_config.get('turn_detection_create_response', True)
-            turn_detection_config["interrupt_response"] = self.agent_config.get('turn_detection_interrupt_response', True)  # Ensures user can interrupt
-
-        elif turn_detection_type == "semantic_vad":
-            # Semantic VAD specific parameters
-            turn_detection_config["eagerness"] = self.agent_config.get('turn_detection_eagerness', 'medium')  # Medium eagerness for balanced response
-            turn_detection_config["prefix_padding_ms"] = self.agent_config.get('turn_detection_prefix_padding_ms', 300)
-            turn_detection_config["silence_duration_ms"] = self.agent_config.get('turn_detection_silence_duration_ms', 500)  # Lowered for better responsiveness
-            turn_detection_config["create_response"] = self.agent_config.get('turn_detection_create_response', True)
-            turn_detection_config["interrupt_response"] = self.agent_config.get('turn_detection_interrupt_response', True)  # Ensures user can interrupt
+        model = self.agent_config.get('model_type') or 'gpt-realtime-2025-08-28'
 
         session_config = {
             "type": "session.update",
             "session": {
-                "model": "gpt-4o-realtime-preview-2024-12-17",
-                "modalities": ["text", "audio"],
+                "type": "realtime",
                 "instructions": instructions,
-                "audio": {
-                    "input": {
-                        "format": "pcm16"
-                    },
-                    "output": {
-                        "voice": voice,
-                        "format": "pcm16"
-                    }
-                },
-                "input_audio_transcription": {
-                    "model": "whisper-1"
-                },
-                "temperature": temperature,
-                "turn_detection": turn_detection_config,
                 "tools": [
                     self._get_rag_tool_definition(),
-                    self._get_end_call_tool_definition(),
-                    self._get_transfer_call_tool_definition()
-                ]
+                    self._get_end_call_tool_definition()
+                ],
+                "tool_choice": "auto"
             }
         }
 
-        # Add max_response_output_tokens if specified
-        if max_tokens is not None:
-            session_config["session"]["max_response_output_tokens"] = max_tokens
-
         await self.send_event(session_config)
-        print(f"[RealtimeSession] Session configured with voice={voice}, temp={temperature}")
+        print(f"[RealtimeSession] Session configured with model={model}")
 
         # Trigger the initial greeting by sending a silent user message
         await self._trigger_initial_greeting()
@@ -208,7 +206,7 @@ TOOL USAGE GUIDELINES:
         return {
             "type": "function",
             "name": "search_knowledge_base",
-            "description": "Search the business's knowledge base (documents, FAQs, policies) for relevant information to answer customer questions accurately.",
+            "description": "MANDATORY: Search uploaded documents - the ONLY source of truth. MUST be called before answering ANY factual question about the business. Call multiple times with different queries if first search fails. NEVER answer without searching first.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -218,8 +216,8 @@ TOOL USAGE GUIDELINES:
                     },
                     "k": {
                         "type": "integer",
-                        "description": "Number of relevant chunks to return (default: 5)",
-                        "default": 5
+                        "description": "Number of relevant chunks to return (default: 10)",
+                        "default": 10
                     }
                 },
                 "required": ["query"]
@@ -243,8 +241,6 @@ TOOL USAGE GUIDELINES:
                 "required": []
             }
         }
-
-    def _get_transfer_call_tool_definition(self) -> Dict[str, Any]:
         """Get the transfer_call function tool definition."""
         return {
             "type": "function",
@@ -412,7 +408,7 @@ TOOL USAGE GUIDELINES:
             self.current_agent_transcript = ""
 
         # Function call requested
-        elif event_type == "conversation.item.created":
+        elif event_type == "response.output_item.done":
             item = event.get("item", {})
             if item.get("type") == "function_call":
                 await self._handle_function_call(item)
@@ -487,7 +483,7 @@ TOOL USAGE GUIDELINES:
             }
             await self.send_event(error_event)
 
-    async def _execute_rag_search(self, query: str, k: int = 5) -> Dict[str, Any]:
+    async def _execute_rag_search(self, query: str, k: int = 10) -> Dict[str, Any]:
         """Execute semantic search in RAG knowledge base."""
         try:
             db = supabase()
@@ -500,7 +496,7 @@ TOOL USAGE GUIDELINES:
                 agent_id=self.agent_id,
                 query=query,
                 k=k,
-                min_similarity=0.6
+                min_similarity=0.5
             )
 
             if not matches:
@@ -596,7 +592,7 @@ TOOL USAGE GUIDELINES:
             # Create TwiML to dial the transfer number
             transfer_twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
                                 <Response>
-                                    <Say voice="Polly.Joanna">{reason}</Say>
+                                    <Say>{reason}</Say>
                                     <Dial>{phone_number}</Dial>
                                 </Response>'''
 
