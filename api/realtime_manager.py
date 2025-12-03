@@ -124,7 +124,7 @@ class RealtimeSession:
                                 - Do NOT add any introduction, do NOT say "hello" or "hi" first
                                 - After the greeting, wait for the user to respond
 
-                                3. FUNCTION CALLING - YOU HAVE ACCESS TO THREE TOOLS THAT YOU MUST USE:
+                                3. FUNCTION CALLING - YOU HAVE ACCESS TO TWO TOOLS THAT YOU MUST USE:
 
                                 A. search_knowledge_base - *** ABSOLUTE REQUIREMENT: SEARCH BEFORE EVERY ANSWER ***
 
@@ -221,6 +221,24 @@ class RealtimeSession:
                 "required": ["query"]
             }
         }
+    
+    def _get_end_call_tool_definition(self) -> Dict[str, Any]:
+      """Get the end call function tool definition."""
+      return {
+          "type": "function",
+          "name": "end_call",
+          "description": "End the phone call gracefully when the conversation is complete.",
+          "parameters": {
+              "type": "object",
+              "properties": {
+                  "reason": {
+                      "type": "string",
+                      "description": "The reason for ending the call"
+                  }
+              },
+              "required": ["reason"]
+          }
+      }
 
     async def _trigger_initial_greeting(self):
         """
@@ -548,3 +566,6 @@ class RealtimeSession:
         }
         await self.send_event(event)
         print("[RealtimeSession] Response interrupted")
+
+if __name__ == "__main__":
+    print("Success YAYYY! :D")
