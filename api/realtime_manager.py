@@ -141,7 +141,6 @@ class RealtimeSession:
                                     1. Call search_knowledge_base with the customer's key terms
                                     2. If no results: Try AGAIN with DIFFERENT search terms (synonyms, broader terms)
                                     3. If still no results: Try a THIRD time with simplified keywords
-                                    4. Only after 3 failed searches may you say "I don't have that information in my knowledge base. Let me transfer you to someone who can help." Then offer transfer_call
 
                                     RULE 2: UPLOADED DOCUMENTS = ONLY SOURCE OF TRUTH
                                     - Search results are the HOLY GRAIL - the ONLY source you can use
@@ -175,7 +174,6 @@ class RealtimeSession:
                                 - SEARCH 3 TIMES MINIMUM before saying "I don't have that information"
                                 - TRY DIFFERENT KEYWORDS: exact terms → synonyms → categories
                                 - UPLOADED DOCUMENTS = ONLY SOURCE - never use general knowledge or training data
-                                - If 3 searches fail, offer to transfer_call to a human who can help
                                 - Every factual answer MUST come from search_knowledge_base results
                                 - Be conversational and natural while following these strict search requirements"""
 
@@ -221,44 +219,6 @@ class RealtimeSession:
                     }
                 },
                 "required": ["query"]
-            }
-        }
-
-    def _get_end_call_tool_definition(self) -> Dict[str, Any]:
-        """Get the end_call function tool definition."""
-        return {
-            "type": "function",
-            "name": "end_call",
-            "description": "Gracefully end the current phone call. Use this when the conversation is complete, the caller wants to hang up, or you need to terminate the call for any reason.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reason": {
-                        "type": "string",
-                        "description": "Optional reason for ending the call (for logging purposes)"
-                    }
-                },
-                "required": []
-            }
-        }
-        """Get the transfer_call function tool definition."""
-        return {
-            "type": "function",
-            "name": "transfer_call",
-            "description": "Transfer the current phone call to another phone number. Use this when the caller needs to speak with someone else or requires specialized assistance.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "phone_number": {
-                        "type": "string",
-                        "description": "The phone number to transfer the call to (E.164 format, e.g., +14155551234)"
-                    },
-                    "reason": {
-                        "type": "string",
-                        "description": "Optional reason for the transfer (for logging and announcement purposes)"
-                    }
-                },
-                "required": ["phone_number"]
             }
         }
 
@@ -425,7 +385,7 @@ class RealtimeSession:
                 await self.on_error(error_msg)
 
     async def _handle_function_call(self, item: Dict[str, Any]):
-        """Handle function call from OpenAI (RAG search, end_call, transfer_call)."""
+        """Handle function call from OpenAI (RAG search, end_call)."""
         call_id = item.get("call_id")
         function_name = item.get("name")
         arguments_str = item.get("arguments", "{}")
@@ -445,11 +405,6 @@ class RealtimeSession:
             elif function_name == "end_call":
                 reason = args.get("reason", "Conversation completed")
                 result = await self._execute_end_call(reason)
-
-            elif function_name == "transfer_call":
-                phone_number = args.get("phone_number")
-                reason = args.get("reason", "Transferring to another department")
-                result = await self._execute_transfer_call(phone_number, reason)
 
             else:
                 result = {"error": f"Unknown function: {function_name}"}
@@ -559,61 +514,6 @@ class RealtimeSession:
 
         except Exception as e:
             print(f"[EndCall] Error: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
-
-    async def _execute_transfer_call(self, phone_number: str, reason: str = "Transferring call") -> Dict[str, Any]:
-        """Transfer the current call to another phone number."""
-        try:
-            print(f"[TransferCall] Transferring to {phone_number}. Reason: {reason}")
-
-            if not self.call_sid:
-                return {
-                    "success": False,
-                    "error": "Call SID not available for transfer"
-                }
-
-            # Use Twilio REST API to update the call with a transfer TwiML
-            from twilio.rest import Client
-
-            account_sid = os.getenv("ACCOUNT_SID")
-            auth_token = os.getenv("AUTH_TOKEN")
-
-            if not account_sid or not auth_token:
-                return {
-                    "success": False,
-                    "error": "Twilio credentials not configured"
-                }
-
-            client = Client(account_sid, auth_token)
-
-            # Create TwiML to dial the transfer number
-            transfer_twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
-                                <Response>
-                                    <Say>{reason}</Say>
-                                    <Dial>{phone_number}</Dial>
-                                </Response>'''
-
-            # Update the active call
-            client.calls(self.call_sid).update(twiml=transfer_twiml)
-
-            print(f"[TransferCall] Successfully transferred to {phone_number}")
-
-            # Update conversation with transfer info
-            db = supabase()
-            db.table('conversation').update({
-                'status': 'transferred'
-            }).eq('id', self.conversation_id).execute()
-
-            return {
-                "success": True,
-                "message": f"Call transferred to {phone_number}"
-            }
-
-        except Exception as e:
-            print(f"[TransferCall] Error: {e}")
             return {
                 "success": False,
                 "error": str(e)
