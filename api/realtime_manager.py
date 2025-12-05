@@ -469,7 +469,7 @@ class RealtimeSession:
                 agent_id=self.agent_id,
                 query=query,
                 k=k,
-                min_similarity=0.5
+                min_similarity=0.3
             )
 
             if not matches:
@@ -483,8 +483,9 @@ class RealtimeSession:
             for match in matches:
                 results.append({
                     "text": match.get("chunk_text", ""),
-                    "similarity": match.get("similarity", 0.0),
-                    "document_id": match.get("document_id")
+                    "similarity": match.get("score", 0.0),  # 'score' not 'similairty'
+                    "filename": match.get("filename", ""),
+                    "chunk_id": match.get("chunk_id"),
                 })
 
             return {
