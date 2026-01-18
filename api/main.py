@@ -29,6 +29,7 @@ app.add_middleware(
         "https://www.helloml.app",      # Production with www
         "http://localhost:3001",        # Local development
         "http://localhost:5173",        # Vite dev server
+        "https://dev.helloml.app"       # Dev Environment
     ],
     allow_credentials=True,
     allow_methods=["*"],
