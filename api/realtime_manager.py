@@ -183,14 +183,19 @@ class RealtimeSession:
         session_config = {
             "type": "session.update",
             "session": {
+                "type": "realtime",
                 "instructions": instructions,
                 "tools": [
                     self._get_rag_tool_definition(),
                     self._get_end_call_tool_definition()
                 ],
                 "tool_choice": "auto",
-                "input_audio_transcription": {
-                    "model": "whisper-1"
+                "audio": {
+                    "input": {
+                        "transcription": {
+                            "model": "whisper-1"
+                        }
+                    }
                 }
             }
         }
