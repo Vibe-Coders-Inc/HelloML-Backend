@@ -9,3 +9,4 @@ supabase
 websockets>=12.0
 scipy>=1.11.0
 numpy>=1.24.0
+httpx>=0.27.0
