@@ -1,0 +1,14 @@
+{
+    "mcpServers": {
+    "claude-context": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["@zilliz/claude-context-mcp@latest"],
+    "env": {}
+    },
+    "supabase": {
+        "type": "http",
+        "url": "https://mcp.supabase.com/mcp?project_ref=clibahlsmlfkzqfxohdq"
+    }
+    }
+}

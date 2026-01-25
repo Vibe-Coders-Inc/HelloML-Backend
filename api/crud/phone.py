@@ -228,3 +228,97 @@ async def delete_phone_by_agent(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{phone_id}/reactivate", summary="Reactivate a paused phone number")
+async def reactivate_phone(
+    phone_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """
+    Reactivates a paused phone number.
+    Phone numbers are automatically paused after 14 days of inactivity.
+    Reactivating resets the inactivity timer.
+    """
+    try:
+        db = current_user.get_db()
+
+        # Check ownership via RLS
+        phone = db.table('phone_number').select('*').eq('id', phone_id).single().execute()
+
+        if not phone.data:
+            raise HTTPException(status_code=404, detail="Phone number not found")
+
+        phone_data = phone.data
+
+        if phone_data['status'] != 'paused':
+            raise HTTPException(
+                status_code=400,
+                detail=f"Phone number is not paused (current status: {phone_data['status']})"
+            )
+
+        # Reactivate the phone number
+        result = db.table('phone_number').update({
+            'status': 'active',
+            'paused_at': None,
+            'last_call_at': 'now()'  # Reset the inactivity timer
+        }).eq('id', phone_id).execute()
+
+        if not result.data:
+            raise HTTPException(status_code=500, detail="Failed to reactivate phone number")
+
+        return {
+            "success": True,
+            "message": f"Phone number {phone_data['phone_number']} reactivated",
+            "phone": result.data[0]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/agent/{agent_id}/reactivate", summary="Reactivate phone by agent")
+async def reactivate_phone_by_agent(
+    agent_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Reactivates a paused phone number for the given agent."""
+    try:
+        db = current_user.get_db()
+
+        # Check ownership via RLS
+        phone = db.table('phone_number').select('*').eq('agent_id', agent_id).execute()
+
+        if not phone.data:
+            raise HTTPException(status_code=404, detail="No phone number found for agent")
+
+        phone_data = phone.data[0]
+
+        if phone_data['status'] != 'paused':
+            raise HTTPException(
+                status_code=400,
+                detail=f"Phone number is not paused (current status: {phone_data['status']})"
+            )
+
+        # Reactivate the phone number
+        result = db.table('phone_number').update({
+            'status': 'active',
+            'paused_at': None,
+            'last_call_at': 'now()'
+        }).eq('id', phone_data['id']).execute()
+
+        if not result.data:
+            raise HTTPException(status_code=500, detail="Failed to reactivate phone number")
+
+        return {
+            "success": True,
+            "message": f"Phone number {phone_data['phone_number']} reactivated",
+            "phone": result.data[0]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
