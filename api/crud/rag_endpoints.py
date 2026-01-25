@@ -71,6 +71,7 @@ async def create_pdf_document(
     agent_id: int = Form(...),
     file: UploadFile = File(...),
     filename: Optional[str] = Form(None),
+    storage_url: Optional[str] = Form(None),
 ):
     try:
         print(f"[RAG] Uploading PDF document for agent {agent_id}")
@@ -94,7 +95,7 @@ async def create_pdf_document(
             filename=final_name,
             text=full_text,
             file_type="application/pdf",
-            storage_url=""
+            storage_url=storage_url or ""
         )
         print(f"[RAG] Successfully created document {result['document_id']} with {result['chunks']} chunks")
         return {
@@ -113,7 +114,7 @@ async def list_documents(agent_id: int):
     try:
         db = supabase()
         result = db.table("document") \
-            .select("id, filename, file_type, uploaded_at") \
+            .select("id, filename, file_type, storage_url, uploaded_at") \
             .eq("agent_id", agent_id) \
             .order("uploaded_at", desc=True) \
             .execute()
