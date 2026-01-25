@@ -189,12 +189,8 @@ class RealtimeSession:
                     self._get_end_call_tool_definition()
                 ],
                 "tool_choice": "auto",
-                "audio": {
-                    "input": {
-                        "transcription": {
-                            "model": "gpt-4o-transcribe"
-                        }
-                    }
+                "input_audio_transcription": {
+                    "model": "whisper-1"
                 }
             }
         }
