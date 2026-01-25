@@ -16,6 +16,7 @@ from .crud.conversation import router as conversation_router
 from .crud.realtime_voice import router as realtime_router
 from .crud.rag_endpoints import router as rag_router
 from .crud.phone_maintenance import router as phone_maintenance_router
+from .crud.billing import router as billing_router
 from api import __version__
 
 
@@ -93,6 +94,7 @@ app.include_router(conversation_router)
 app.include_router(realtime_router)
 app.include_router(rag_router)
 app.include_router(phone_maintenance_router)
+app.include_router(billing_router)
 
 
 @app.get("/", summary="API status")
