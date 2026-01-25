@@ -3,16 +3,25 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
-from .database import supabase
+from supabase import Client
+from .database import get_service_client, get_user_client
 
 security = HTTPBearer()
 
 
 class AuthenticatedUser:
     """Represents an authenticated user from Supabase JWT"""
-    def __init__(self, id: str, email: Optional[str] = None):
+    def __init__(self, id: str, email: Optional[str], access_token: str):
         self.id = id
         self.email = email
+        self.access_token = access_token
+        self._db_client: Optional[Client] = None
+
+    def get_db(self) -> Client:
+        """Returns a Supabase client authenticated as this user (RLS enforced)"""
+        if self._db_client is None:
+            self._db_client = get_user_client(self.access_token)
+        return self._db_client
 
 
 async def get_current_user(
@@ -25,9 +34,9 @@ async def get_current_user(
     token = credentials.credentials
 
     try:
-        db = supabase()
-        # Verify token with Supabase - this checks signature, expiration, etc.
-        response = db.auth.get_user(token)
+        # Use service client to verify the token
+        service_db = get_service_client()
+        response = service_db.auth.get_user(token)
 
         if not response or not response.user:
             raise HTTPException(
@@ -39,7 +48,8 @@ async def get_current_user(
         user = response.user
         return AuthenticatedUser(
             id=user.id,
-            email=user.email
+            email=user.email,
+            access_token=token
         )
 
     except HTTPException:
@@ -57,7 +67,6 @@ async def get_optional_user(
 ) -> Optional[AuthenticatedUser]:
     """
     Optional authentication - returns user if valid token provided, None otherwise.
-    Useful for endpoints that work differently for authenticated vs anonymous users.
     """
     if not credentials:
         return None
@@ -68,7 +77,7 @@ async def get_optional_user(
         return None
 
 
-def verify_business_ownership(db, business_id: int, user_id: str) -> dict:
+def verify_business_ownership(db: Client, business_id: int, user_id: str) -> dict:
     """
     Verifies user owns the business. Returns business data if owned.
     Raises 403 if user doesn't own the business, 404 if not found.
@@ -87,12 +96,11 @@ def verify_business_ownership(db, business_id: int, user_id: str) -> dict:
     return result.data
 
 
-def verify_agent_ownership(db, agent_id: int, user_id: str) -> dict:
+def verify_agent_ownership(db: Client, agent_id: int, user_id: str) -> dict:
     """
     Verifies user owns the agent (via business). Returns agent data if owned.
     Raises 403 if user doesn't own the agent, 404 if not found.
     """
-    # Get agent with business info
     result = db.table('agent').select('*, business:business_id(owner_user_id)').eq('id', agent_id).single().execute()
 
     if not result.data:

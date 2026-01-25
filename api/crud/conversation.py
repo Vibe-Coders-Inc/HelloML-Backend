@@ -3,39 +3,13 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
-from ..database import supabase
-from ..auth import get_current_user, AuthenticatedUser, verify_business_ownership, verify_agent_ownership
+from ..auth import get_current_user, AuthenticatedUser
 
 router = APIRouter(prefix="/conversation", tags=["Conversation"])
 
 
 class ConversationEnd(BaseModel):
     status: str = "completed"
-
-
-def verify_conversation_ownership(db, conversation_id: int, user_id: str) -> dict:
-    """Verify user owns the conversation through agent->business chain"""
-    result = db.table('conversation')\
-        .select('*, agent:agent_id(business_id, business:business_id(owner_user_id))')\
-        .eq('id', conversation_id)\
-        .single()\
-        .execute()
-
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-
-    agent = result.data.get('agent')
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found for conversation")
-
-    business = agent.get('business')
-    if not business or business.get('owner_user_id') != user_id:
-        raise HTTPException(
-            status_code=403,
-            detail="You don't have permission to access this conversation"
-        )
-
-    return result.data
 
 
 @router.get("/{conversation_id}", summary="Get conversation details")
@@ -46,12 +20,16 @@ async def get_conversation(
 ):
     """Gets conversation by ID with optional messages - user must own the conversation"""
     try:
-        db = supabase()
+        db = current_user.get_db()
 
-        # Verify ownership
-        result = verify_conversation_ownership(db, conversation_id, current_user.id)
+        # RLS will filter to owned conversations
+        conv = db.table('conversation').select('*').eq('id', conversation_id).single().execute()
 
-        # Include messages if requested
+        if not conv.data:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+        result = conv.data
+
         if include_messages:
             messages = db.table('message')\
                 .select('*')\
@@ -78,12 +56,9 @@ async def list_conversations(
 ):
     """Lists conversations for an agent - user must own the agent"""
     try:
-        db = supabase()
+        db = current_user.get_db()
 
-        # Verify ownership
-        verify_agent_ownership(db, agent_id, current_user.id)
-
-        # Build query
+        # RLS will filter to owned agents/conversations
         query = db.table('conversation').select('*').eq('agent_id', agent_id)
 
         if status:
@@ -114,12 +89,9 @@ async def list_conversations_by_business(
 ):
     """Lists all conversations for a business - user must own the business"""
     try:
-        db = supabase()
+        db = current_user.get_db()
 
-        # Verify ownership
-        verify_business_ownership(db, business_id, current_user.id)
-
-        # Get agent for business
+        # Get agent for business (RLS will filter)
         agent = db.table('agent').select('id').eq('business_id', business_id).execute()
 
         if not agent.data:
@@ -127,7 +99,6 @@ async def list_conversations_by_business(
 
         agent_id = agent.data[0]['id']
 
-        # Get conversations
         query = db.table('conversation').select('*').eq('agent_id', agent_id)
 
         if status:
@@ -155,12 +126,13 @@ async def get_messages(
 ):
     """Gets all messages for a conversation - user must own the conversation"""
     try:
-        db = supabase()
+        db = current_user.get_db()
 
-        # Verify ownership
-        verify_conversation_ownership(db, conversation_id, current_user.id)
+        # Verify conversation access (RLS)
+        conv = db.table('conversation').select('id').eq('id', conversation_id).execute()
+        if not conv.data:
+            raise HTTPException(status_code=404, detail="Conversation not found")
 
-        # Get messages
         messages = db.table('message')\
             .select('*')\
             .eq('conversation_id', conversation_id)\
@@ -187,16 +159,14 @@ async def end_conversation(
 ):
     """Marks conversation as completed or failed - user must own the conversation"""
     try:
-        db = supabase()
-
-        # Verify ownership
-        verify_conversation_ownership(db, conversation_id, current_user.id)
+        db = current_user.get_db()
 
         status = data.status
 
         if status not in ['completed', 'failed', 'cancelled']:
             raise HTTPException(status_code=400, detail="Invalid status")
 
+        # RLS will filter
         result = db.table('conversation').update({
             'status': status,
             'ended_at': 'now()'
@@ -220,12 +190,9 @@ async def delete_conversation(
 ):
     """Deletes conversation and all messages - user must own the conversation"""
     try:
-        db = supabase()
+        db = current_user.get_db()
 
-        # Verify ownership
-        verify_conversation_ownership(db, conversation_id, current_user.id)
-
-        # Delete (CASCADE will delete messages)
+        # RLS will filter
         db.table('conversation').delete().eq('id', conversation_id).execute()
 
         return {"success": True, "message": "Conversation deleted"}
@@ -243,15 +210,11 @@ async def get_agent_stats(
 ):
     """Gets conversation statistics for an agent - user must own the agent"""
     try:
-        db = supabase()
+        db = current_user.get_db()
 
-        # Verify ownership
-        verify_agent_ownership(db, agent_id, current_user.id)
-
-        # Get all conversations
+        # RLS will filter
         all_convs = db.table('conversation').select('status').eq('agent_id', agent_id).execute()
 
-        # Count by status
         stats = {
             'total': len(all_convs.data),
             'in_progress': 0,
@@ -265,7 +228,6 @@ async def get_agent_stats(
             if status in stats:
                 stats[status] += 1
 
-        # Get recent conversations
         recent = db.table('conversation')\
             .select('*')\
             .eq('agent_id', agent_id)\

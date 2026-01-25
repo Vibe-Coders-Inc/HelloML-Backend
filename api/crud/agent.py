@@ -5,8 +5,8 @@ from pydantic import BaseModel
 from typing import Optional
 from twilio.rest import Client
 import os
-from ..database import supabase
-from ..auth import get_current_user, AuthenticatedUser, verify_business_ownership, verify_agent_ownership
+from ..database import get_service_client
+from ..auth import get_current_user, AuthenticatedUser
 
 router = APIRouter(prefix="/agent", tags=["Agent"])
 
@@ -33,15 +33,13 @@ class AgentUpdate(BaseModel):
 
 
 async def provision_phone_for_agent(agent_id: int, area_code: str):
-    """Internal function to provision phone number for agent"""
-    db = supabase()
+    """Internal function to provision phone number for agent (uses service client)"""
+    db = get_service_client()
 
-    # Check if agent already has a phone
     existing_phone = db.table('phone_number').select('*').eq('agent_id', agent_id).execute()
     if existing_phone.data:
         return existing_phone.data[0]
 
-    # Provision number with Twilio
     client = Client(os.getenv("ACCOUNT_SID"), os.getenv("AUTH_TOKEN"))
 
     available = client.available_phone_numbers('US').local.list(
@@ -52,7 +50,6 @@ async def provision_phone_for_agent(agent_id: int, area_code: str):
     if not available:
         raise Exception(f"No numbers available in area code {area_code}")
 
-    # Updated to use OpenAI Realtime API + Twilio Media Streams
     base_url = os.getenv("API_BASE_URL", "https://api.helloml.app")
     webhook_url = f"{base_url}/conversation/{agent_id}/voice"
 
@@ -62,7 +59,6 @@ async def provision_phone_for_agent(agent_id: int, area_code: str):
         voice_method='POST'
     )
 
-    # Save to database
     result = db.table('phone_number').insert({
         'agent_id': agent_id,
         'phone_number': number.phone_number,
@@ -82,15 +78,17 @@ async def create_agent(
 ):
     """Creates agent and provisions phone number - user must own the business"""
     try:
-        db = supabase()
+        db = current_user.get_db()
 
         business_id = agent.business_id
         area_code = agent.area_code
 
-        # Verify user owns the business
-        verify_business_ownership(db, business_id, current_user.id)
+        # With RLS, this will fail if user doesn't own the business
+        business = db.table('business').select('*').eq('id', business_id).single().execute()
+        if not business.data:
+            raise HTTPException(status_code=404, detail="Business not found or access denied")
 
-        # Check if business already has an agent (one per business)
+        # Check if business already has an agent
         existing_agent = db.table('agent').select('*').eq('business_id', business_id).execute()
         if existing_agent.data:
             raise HTTPException(status_code=400, detail="Business already has an agent")
@@ -109,12 +107,11 @@ async def create_agent(
 
         agent_data = agent_result.data[0]
 
-        # Provision phone number
+        # Provision phone number (uses service client internally)
         try:
             phone = await provision_phone_for_agent(agent_data['id'], area_code)
             agent_data['phone_number'] = phone
         except Exception as e:
-            # If phone provisioning fails, still return agent but with error
             agent_data['phone_number'] = None
             agent_data['phone_error'] = str(e)
 
@@ -133,17 +130,13 @@ async def get_agent(
 ):
     """Gets agent by ID with phone number - user must own the agent"""
     try:
-        db = supabase()
+        db = current_user.get_db()
 
-        # Verify ownership
-        verify_agent_ownership(db, agent_id, current_user.id)
-
-        # Get agent
+        # With RLS, only returns if user owns it
         agent = db.table('agent').select('*').eq('id', agent_id).single().execute()
         if not agent.data:
             raise HTTPException(status_code=404, detail="Agent not found")
 
-        # Get phone number
         phone = db.table('phone_number').select('*').eq('agent_id', agent_id).execute()
 
         result = agent.data
@@ -164,19 +157,15 @@ async def get_agent_by_business(
 ):
     """Gets agent for a business - user must own the business"""
     try:
-        db = supabase()
+        db = current_user.get_db()
 
-        # Verify user owns the business
-        verify_business_ownership(db, business_id, current_user.id)
-
-        # Get agent
+        # With RLS, only returns if user owns it
         agent = db.table('agent').select('*').eq('business_id', business_id).execute()
         if not agent.data:
             raise HTTPException(status_code=404, detail="No agent found for this business")
 
         agent_data = agent.data[0]
 
-        # Get phone number
         phone = db.table('phone_number').select('*').eq('agent_id', agent_data['id']).execute()
         agent_data['phone_number'] = phone.data[0] if phone.data else None
 
@@ -196,35 +185,29 @@ async def update_agent(
 ):
     """Updates agent configuration - user must own the agent"""
     try:
-        db = supabase()
+        db = current_user.get_db()
 
-        # Verify ownership
-        verify_agent_ownership(db, agent_id, current_user.id)
-
-        # Only update fields that are provided
         update_data = agent.model_dump(exclude_unset=True)
 
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields to update")
 
-        # Log warning if prompt is explicitly set to empty string
         if 'prompt' in update_data and (update_data['prompt'] is None or update_data['prompt'].strip() == ''):
-            print(f"[WARNING] Agent {agent_id}: Prompt set to empty. Will use default prompt during calls.")
+            print(f"[WARNING] Agent {agent_id}: Prompt set to empty.")
 
-        # Log configuration updates for debugging
         print(f"[Agent Update] Agent {agent_id}: Updating fields: {list(update_data.keys())}")
 
         update_data['updated_at'] = 'now()'
 
+        # With RLS, only succeeds if user owns it
         result = db.table('agent').update(update_data).eq('id', agent_id).execute()
 
         if not result.data:
             raise HTTPException(status_code=404, detail="Agent not found")
 
-        updated_agent = result.data[0]
         print(f"[Agent Update] Agent {agent_id}: Update successful")
 
-        return updated_agent
+        return result.data[0]
 
     except HTTPException:
         raise
@@ -239,25 +222,27 @@ async def delete_agent(
 ):
     """Deletes agent and releases phone number - user must own the agent"""
     try:
-        db = supabase()
+        db = current_user.get_db()
 
-        # Verify ownership
-        verify_agent_ownership(db, agent_id, current_user.id)
+        # First verify we can see this agent (RLS check)
+        agent_check = db.table('agent').select('id').eq('id', agent_id).execute()
+        if not agent_check.data:
+            raise HTTPException(status_code=404, detail="Agent not found")
 
-        # Get phone number to release from Twilio
-        phone = db.table('phone_number').select('*').eq('agent_id', agent_id).execute()
+        # Get phone number to release from Twilio (use service client)
+        service_db = get_service_client()
+        phone = service_db.table('phone_number').select('*').eq('agent_id', agent_id).execute()
 
         if phone.data:
             try:
                 client = Client(os.getenv("ACCOUNT_SID"), os.getenv("AUTH_TOKEN"))
-                # Find and release the Twilio number
                 numbers = client.incoming_phone_numbers.list(phone_number=phone.data[0]['phone_number'])
                 if numbers:
                     numbers[0].delete()
             except Exception as e:
                 print(f"Failed to release Twilio number: {e}")
 
-        # Delete agent (CASCADE will delete phone_number, conversations, etc.)
+        # Delete agent (with RLS)
         db.table('agent').delete().eq('id', agent_id).execute()
 
         return {"success": True}

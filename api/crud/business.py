@@ -3,7 +3,6 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
-from ..database import supabase
 from ..auth import get_current_user, AuthenticatedUser, verify_business_ownership
 
 router = APIRouter(prefix="/business", tags=["Business"])
@@ -30,7 +29,7 @@ async def create_business(
 ):
     """Creates a new business for the authenticated user"""
     try:
-        db = supabase()
+        db = current_user.get_db()
 
         result = db.table('business').insert({
             'owner_user_id': current_user.id,
@@ -53,9 +52,15 @@ async def get_business(
 ):
     """Gets business by ID - user must own the business"""
     try:
-        db = supabase()
-        business = verify_business_ownership(db, business_id, current_user.id)
-        return business
+        db = current_user.get_db()
+
+        # With RLS enabled, this will only return if user owns it
+        result = db.table('business').select('*').eq('id', business_id).single().execute()
+
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Business not found")
+
+        return result.data
 
     except HTTPException:
         raise
@@ -69,9 +74,10 @@ async def list_businesses(
 ):
     """Lists all businesses for the authenticated user"""
     try:
-        db = supabase()
+        db = current_user.get_db()
 
-        result = db.table('business').select('*').eq('owner_user_id', current_user.id).execute()
+        # With RLS enabled, this automatically filters to user's businesses
+        result = db.table('business').select('*').execute()
 
         return result.data
 
@@ -87,17 +93,14 @@ async def update_business(
 ):
     """Updates business information - user must own the business"""
     try:
-        db = supabase()
+        db = current_user.get_db()
 
-        # Verify ownership first
-        verify_business_ownership(db, business_id, current_user.id)
-
-        # Only update fields that are provided
         update_data = business.model_dump(exclude_unset=True)
 
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields to update")
 
+        # With RLS enabled, this will only succeed if user owns the business
         result = db.table('business').update(update_data).eq('id', business_id).execute()
 
         if not result.data:
@@ -118,11 +121,9 @@ async def delete_business(
 ):
     """Deletes business and all associated data - user must own the business"""
     try:
-        db = supabase()
+        db = current_user.get_db()
 
-        # Verify ownership first
-        verify_business_ownership(db, business_id, current_user.id)
-
+        # With RLS enabled, this will only succeed if user owns the business
         db.table('business').delete().eq('id', business_id).execute()
 
         return {"success": True}

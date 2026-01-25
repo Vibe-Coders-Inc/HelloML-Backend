@@ -9,7 +9,7 @@ import json
 import asyncio
 import websockets
 from typing import Optional, Dict, Any, Callable
-from api.database import supabase
+from api.database import get_service_client
 from api.rag import semantic_search
 from openai import OpenAI
 import os
@@ -470,7 +470,7 @@ class RealtimeSession:
     async def _execute_rag_search(self, query: str, k: int = 10) -> Dict[str, Any]:
         """Execute semantic search in RAG knowledge base."""
         try:
-            db = supabase()
+            db = get_service_client()
             ai = OpenAI(api_key=self.api_key)
 
             # Use existing semantic_search function
@@ -528,7 +528,7 @@ class RealtimeSession:
                 await self.twilio_ws.close(code=1000, reason="Call ended by agent")
 
             # Update conversation status
-            db = supabase()
+            db = get_service_client()
             db.table('conversation').update({
                 'status': 'completed',
                 'ended_at': 'now()'
@@ -552,7 +552,7 @@ class RealtimeSession:
     async def _save_message(self, role: str, content: str):
         """Save message to database."""
         try:
-            db = supabase()
+            db = get_service_client()
             db.table('message').insert({
                 'conversation_id': self.conversation_id,
                 'role': role,

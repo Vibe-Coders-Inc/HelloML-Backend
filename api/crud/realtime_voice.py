@@ -9,7 +9,7 @@ import json
 import asyncio
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import Response
-from api.database import supabase
+from api.database import get_service_client
 from api.realtime_manager import RealtimeSession
 from api.audio_utils import twilio_to_openai, openai_to_twilio
 
@@ -26,7 +26,7 @@ async def handle_incoming_call(agent_id: int, request: Request):
     Now we use <Connect><Stream> to establish a WebSocket connection for bidirectional audio.
     """
     try:
-        db = supabase()
+        db = get_service_client()
         form_data = await request.form()
 
         caller_phone = form_data.get('From', 'unknown')
@@ -169,7 +169,7 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int):
 
     try:
         print(f"[MediaStream] Getting database connection", flush=True)
-        db = supabase()
+        db = get_service_client()
         print(f"[MediaStream] Database connection established", flush=True)
         # Get agent config
         print(f"[MediaStream] Fetching agent config for agent_id={agent_id}", flush=True)
