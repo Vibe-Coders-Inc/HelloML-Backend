@@ -183,7 +183,6 @@ class RealtimeSession:
         session_config = {
             "type": "session.update",
             "session": {
-                "type": "realtime",
                 "instructions": instructions,
                 "tools": [
                     self._get_rag_tool_definition(),
@@ -361,6 +360,10 @@ class RealtimeSession:
     async def _handle_event(self, event: Dict[str, Any]):
         """Handle server events from OpenAI."""
         event_type = event.get("type")
+
+        # Debug: log transcription-related events
+        if "transcription" in event_type.lower() if event_type else False:
+            print(f"[DEBUG] Transcription event: {event_type} - {event}")
 
         # Audio output from AI
         if event_type == "response.output_audio.delta":
