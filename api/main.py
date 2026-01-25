@@ -21,10 +21,17 @@ from api import __version__
 class DocsAccessMiddleware(BaseHTTPMiddleware):
     """Restrict /docs and /redoc access to dev environments only."""
 
-    ALLOWED_ORIGINS = [
-        "https://dev.helloml.app",
-        "http://localhost:3000",
-        "http://localhost:5173",
+    # Hosts where docs should be accessible
+    ALLOWED_HOSTS = [
+        "api.dev.helloml.app",
+        "fly.dev",  # Fly.io direct URL for dev access
+        "localhost",
+        "127.0.0.1",
+    ]
+
+    # Hosts where docs should be blocked (production)
+    BLOCKED_HOSTS = [
+        "api.helloml.app",
     ]
 
     async def dispatch(self, request: Request, call_next):
@@ -32,21 +39,17 @@ class DocsAccessMiddleware(BaseHTTPMiddleware):
 
         # Check if accessing docs endpoints
         if path in ["/docs", "/redoc", "/openapi.json"]:
-            origin = request.headers.get("origin", "")
-            referer = request.headers.get("referer", "")
+            host = request.headers.get("host", "").split(":")[0]  # Remove port if present
 
-            # Allow if origin or referer is from allowed dev environments
-            is_allowed = any(
-                origin.startswith(allowed) or referer.startswith(allowed)
-                for allowed in self.ALLOWED_ORIGINS
-            )
+            # Block if host is production
+            if any(blocked in host for blocked in self.BLOCKED_HOSTS):
+                return JSONResponse(
+                    status_code=404,
+                    content={"detail": "Not found"}
+                )
 
-            # Also allow direct access from localhost (no origin header)
-            if not origin and not referer:
-                # Check if it's a local request (for local dev)
-                host = request.headers.get("host", "")
-                if "localhost" in host or "127.0.0.1" in host:
-                    is_allowed = True
+            # Allow if host is in allowed list (dev environments)
+            is_allowed = any(allowed in host for allowed in self.ALLOWED_HOSTS)
 
             if not is_allowed:
                 return JSONResponse(
