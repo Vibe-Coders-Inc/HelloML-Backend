@@ -369,7 +369,7 @@ class RealtimeSession:
                 await self.on_audio(audio_base64)
 
         # User speech transcript
-        elif event_type == "input_audio_transcription.completed":
+        elif event_type == "conversation.item.input_audio_transcription.completed":
             transcript = event.get("transcript", "")
             if transcript:
                 print(f"[User]: {transcript}")
