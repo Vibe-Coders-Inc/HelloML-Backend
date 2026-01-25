@@ -1,23 +1,26 @@
 # api/crud/agent.py
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
 from twilio.rest import Client
 import os
 from ..database import supabase
+from ..auth import get_current_user, AuthenticatedUser, verify_business_ownership, verify_agent_ownership
 
 router = APIRouter(prefix="/agent", tags=["Agent"])
+
 
 class AgentCreate(BaseModel):
     business_id: int
     area_code: str
     name: Optional[str] = "Agent"
-    model_type: Optional[str] = "gpt-realtime-2025-08-28"  # Latest model for Realtime API
+    model_type: Optional[str] = "gpt-realtime-2025-08-28"
     temperature: Optional[float] = 0.7
     prompt: Optional[str] = None
     greeting: Optional[str] = "Hello There!"
     goodbye: Optional[str] = "Goodbye and take care!"
+
 
 class AgentUpdate(BaseModel):
     name: Optional[str] = None
@@ -28,23 +31,24 @@ class AgentUpdate(BaseModel):
     goodbye: Optional[str] = None
     status: Optional[str] = None
 
+
 async def provision_phone_for_agent(agent_id: int, area_code: str):
     """Internal function to provision phone number for agent"""
     db = supabase()
-    
+
     # Check if agent already has a phone
     existing_phone = db.table('phone_number').select('*').eq('agent_id', agent_id).execute()
     if existing_phone.data:
         return existing_phone.data[0]
-    
+
     # Provision number with Twilio
     client = Client(os.getenv("ACCOUNT_SID"), os.getenv("AUTH_TOKEN"))
-    
+
     available = client.available_phone_numbers('US').local.list(
         area_code=area_code,
         limit=1
     )
-    
+
     if not available:
         raise Exception(f"No numbers available in area code {area_code}")
 
@@ -57,7 +61,7 @@ async def provision_phone_for_agent(agent_id: int, area_code: str):
         voice_url=webhook_url,
         voice_method='POST'
     )
-    
+
     # Save to database
     result = db.table('phone_number').insert({
         'agent_id': agent_id,
@@ -67,29 +71,30 @@ async def provision_phone_for_agent(agent_id: int, area_code: str):
         'webhook_url': webhook_url,
         'status': 'active'
     }).execute()
-    
+
     return result.data[0]
 
 
 @router.post("", summary="Create agent")
-async def create_agent(agent: AgentCreate):
-    """Creates agent and provisions phone number"""
+async def create_agent(
+    agent: AgentCreate,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Creates agent and provisions phone number - user must own the business"""
     try:
         db = supabase()
 
         business_id = agent.business_id
         area_code = agent.area_code
 
-        # Check if business exists
-        business = db.table('business').select('*').eq('id', business_id).single().execute()
-        if not business.data:
-            raise HTTPException(status_code=404, detail="Business not found")
-        
+        # Verify user owns the business
+        verify_business_ownership(db, business_id, current_user.id)
+
         # Check if business already has an agent (one per business)
         existing_agent = db.table('agent').select('*').eq('business_id', business_id).execute()
         if existing_agent.data:
             raise HTTPException(status_code=400, detail="Business already has an agent")
-        
+
         # Create agent
         agent_result = db.table('agent').insert({
             'business_id': business_id,
@@ -101,9 +106,9 @@ async def create_agent(agent: AgentCreate):
             'goodbye': agent.goodbye,
             'status': 'active'
         }).execute()
-        
+
         agent_data = agent_result.data[0]
-        
+
         # Provision phone number
         try:
             phone = await provision_phone_for_agent(agent_data['id'], area_code)
@@ -112,9 +117,9 @@ async def create_agent(agent: AgentCreate):
             # If phone provisioning fails, still return agent but with error
             agent_data['phone_number'] = None
             agent_data['phone_error'] = str(e)
-        
+
         return agent_data
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -122,24 +127,30 @@ async def create_agent(agent: AgentCreate):
 
 
 @router.get("/{agent_id}", summary="Get agent")
-async def get_agent(agent_id: int):
-    """Gets agent by ID with phone number"""
+async def get_agent(
+    agent_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Gets agent by ID with phone number - user must own the agent"""
     try:
         db = supabase()
-        
+
+        # Verify ownership
+        verify_agent_ownership(db, agent_id, current_user.id)
+
         # Get agent
         agent = db.table('agent').select('*').eq('id', agent_id).single().execute()
         if not agent.data:
             raise HTTPException(status_code=404, detail="Agent not found")
-        
+
         # Get phone number
         phone = db.table('phone_number').select('*').eq('agent_id', agent_id).execute()
-        
+
         result = agent.data
         result['phone_number'] = phone.data[0] if phone.data else None
-        
+
         return result
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -147,24 +158,30 @@ async def get_agent(agent_id: int):
 
 
 @router.get("/business/{business_id}/agent", summary="Get agent for business")
-async def get_agent_by_business(business_id: int):
-    """Gets agent for a business"""
+async def get_agent_by_business(
+    business_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Gets agent for a business - user must own the business"""
     try:
         db = supabase()
-        
+
+        # Verify user owns the business
+        verify_business_ownership(db, business_id, current_user.id)
+
         # Get agent
         agent = db.table('agent').select('*').eq('business_id', business_id).execute()
         if not agent.data:
             raise HTTPException(status_code=404, detail="No agent found for this business")
-        
+
         agent_data = agent.data[0]
-        
+
         # Get phone number
         phone = db.table('phone_number').select('*').eq('agent_id', agent_data['id']).execute()
         agent_data['phone_number'] = phone.data[0] if phone.data else None
-        
+
         return agent_data
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -172,10 +189,17 @@ async def get_agent_by_business(business_id: int):
 
 
 @router.put("/{agent_id}", summary="Update agent")
-async def update_agent(agent_id: int, agent: AgentUpdate):
-    """Updates agent configuration"""
+async def update_agent(
+    agent_id: int,
+    agent: AgentUpdate,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Updates agent configuration - user must own the agent"""
     try:
         db = supabase()
+
+        # Verify ownership
+        verify_agent_ownership(db, agent_id, current_user.id)
 
         # Only update fields that are provided
         update_data = agent.model_dump(exclude_unset=True)
@@ -201,7 +225,7 @@ async def update_agent(agent_id: int, agent: AgentUpdate):
         print(f"[Agent Update] Agent {agent_id}: Update successful")
 
         return updated_agent
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -209,14 +233,20 @@ async def update_agent(agent_id: int, agent: AgentUpdate):
 
 
 @router.delete("/{agent_id}", summary="Delete agent")
-async def delete_agent(agent_id: int):
-    """Deletes agent and releases phone number"""
+async def delete_agent(
+    agent_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Deletes agent and releases phone number - user must own the agent"""
     try:
         db = supabase()
-        
+
+        # Verify ownership
+        verify_agent_ownership(db, agent_id, current_user.id)
+
         # Get phone number to release from Twilio
         phone = db.table('phone_number').select('*').eq('agent_id', agent_id).execute()
-        
+
         if phone.data:
             try:
                 client = Client(os.getenv("ACCOUNT_SID"), os.getenv("AUTH_TOKEN"))
@@ -226,12 +256,13 @@ async def delete_agent(agent_id: int):
                     numbers[0].delete()
             except Exception as e:
                 print(f"Failed to release Twilio number: {e}")
-        
+
         # Delete agent (CASCADE will delete phone_number, conversations, etc.)
         db.table('agent').delete().eq('id', agent_id).execute()
-        
+
         return {"success": True}
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-

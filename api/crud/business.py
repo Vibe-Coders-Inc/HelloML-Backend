@@ -1,18 +1,20 @@
 # api/crud/business.py
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
 from ..database import supabase
+from ..auth import get_current_user, AuthenticatedUser, verify_business_ownership
 
 router = APIRouter(prefix="/business", tags=["Business"])
 
+
 class BusinessCreate(BaseModel):
-    owner_user_id: str
     name: str
     address: str
     phone_number: Optional[str] = None
     business_email: Optional[str] = None
+
 
 class BusinessUpdate(BaseModel):
     name: Optional[str] = None
@@ -20,77 +22,89 @@ class BusinessUpdate(BaseModel):
     phone_number: Optional[str] = None
     business_email: Optional[str] = None
 
+
 @router.post("", summary="Create business")
-async def create_business(business: BusinessCreate):
-    """Creates a new business"""
+async def create_business(
+    business: BusinessCreate,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Creates a new business for the authenticated user"""
     try:
         db = supabase()
-        
-        # Insert business
+
         result = db.table('business').insert({
-            'owner_user_id': business.owner_user_id,
+            'owner_user_id': current_user.id,
             'name': business.name,
             'phone_number': business.phone_number,
             'business_email': business.business_email,
             'address': business.address
         }).execute()
-        
+
         return result.data[0]
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{business_id}", summary="Get business")
-async def get_business(business_id: int):
-    """Gets business by ID"""
+async def get_business(
+    business_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Gets business by ID - user must own the business"""
     try:
         db = supabase()
-        
-        result = db.table('business').select('*').eq('id', business_id).single().execute()
-        
-        if not result.data:
-            raise HTTPException(status_code=404, detail="Business not found")
-        
-        return result.data
-        
+        business = verify_business_ownership(db, business_id, current_user.id)
+        return business
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("", summary="List businesses for owner")
-async def list_businesses(owner_user_id: str):
-    """Lists all businesses for an owner"""
+async def list_businesses(
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Lists all businesses for the authenticated user"""
     try:
         db = supabase()
-        
-        result = db.table('business').select('*').eq('owner_user_id', owner_user_id).execute()
-        
+
+        result = db.table('business').select('*').eq('owner_user_id', current_user.id).execute()
+
         return result.data
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.put("/{business_id}", summary="Update business")
-async def update_business(business_id: int, business: BusinessUpdate):
-    """Updates business information"""
+async def update_business(
+    business_id: int,
+    business: BusinessUpdate,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Updates business information - user must own the business"""
     try:
         db = supabase()
-        
+
+        # Verify ownership first
+        verify_business_ownership(db, business_id, current_user.id)
+
         # Only update fields that are provided
         update_data = business.model_dump(exclude_unset=True)
-        
+
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields to update")
-        
+
         result = db.table('business').update(update_data).eq('id', business_id).execute()
-        
+
         if not result.data:
             raise HTTPException(status_code=404, detail="Business not found")
-        
+
         return result.data[0]
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -98,14 +112,22 @@ async def update_business(business_id: int, business: BusinessUpdate):
 
 
 @router.delete("/{business_id}", summary="Delete business")
-async def delete_business(business_id: int):
-    """Deletes business and all associated data"""
+async def delete_business(
+    business_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Deletes business and all associated data - user must own the business"""
     try:
         db = supabase()
-        
+
+        # Verify ownership first
+        verify_business_ownership(db, business_id, current_user.id)
+
         db.table('business').delete().eq('id', business_id).execute()
-        
+
         return {"success": True}
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,43 +1,48 @@
 # api/crud/phone.py
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from twilio.rest import Client
 import os
 import logging
 from typing import Optional
 from ..database import supabase
+from ..auth import get_current_user, AuthenticatedUser, verify_agent_ownership
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/phone", tags=["Phone"])
 
+
 class ProvisionPhoneRequest(BaseModel):
     agent_id: int
     area_code: str
-    force: Optional[bool] = False  # Allow forcing re-provision by cleaning up existing phone
+    force: Optional[bool] = False
 
 
 @router.post("/provision", summary="Provision phone number for agent")
-async def provision_phone(request: ProvisionPhoneRequest):
+async def provision_phone(
+    request: ProvisionPhoneRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
     """
     Provisions a new phone number for an existing agent.
+    User must own the agent's business.
 
     If force=True, will automatically release any existing phone number before provisioning.
-    This is useful for recovering from inconsistent states or re-provisioning after deletion.
     """
     try:
         db = supabase()
 
-        # Check if agent exists and get agent data
-        agent = db.table('agent').select('*').eq('id', request.agent_id).execute()
-        if not agent.data:
-            raise HTTPException(status_code=404, detail="Agent not found")
+        # Verify user owns the agent
+        verify_agent_ownership(db, request.agent_id, current_user.id)
 
+        # Get agent data
+        agent = db.table('agent').select('*').eq('id', request.agent_id).execute()
         agent_data = agent.data[0]
 
-        # Validate agent status - only provision for agents that aren't deleted/invalid
+        # Validate agent status
         if agent_data.get('status') not in ['active', 'inactive', 'paused']:
             raise HTTPException(
                 status_code=400,
@@ -49,18 +54,15 @@ async def provision_phone(request: ProvisionPhoneRequest):
 
         if existing_phone.data:
             if not request.force:
-                # Return clear error message with the existing phone info
                 phone = existing_phone.data[0]
                 raise HTTPException(
                     status_code=400,
                     detail=f"Agent already has phone number: {phone['phone_number']}. Use force=true to replace it."
                 )
             else:
-                # Force mode: Clean up existing phone before provisioning new one
                 logger.info(f"Force mode: Releasing existing phone for agent {request.agent_id}")
                 phone_id = existing_phone.data[0]['id']
                 try:
-                    # Use the internal cleanup logic
                     await _cleanup_phone_internal(db, phone_id)
                     logger.info(f"Successfully cleaned up phone {phone_id} for agent {request.agent_id}")
                 except Exception as cleanup_error:
@@ -73,7 +75,7 @@ async def provision_phone(request: ProvisionPhoneRequest):
         # Initialize Twilio client
         client = Client(os.getenv("ACCOUNT_SID"), os.getenv("AUTH_TOKEN"))
 
-        # Search for available numbers in the requested area code
+        # Search for available numbers
         try:
             available = client.available_phone_numbers('US').local.list(
                 area_code=request.area_code,
@@ -150,11 +152,7 @@ async def provision_phone(request: ProvisionPhoneRequest):
 
 
 async def _cleanup_phone_internal(db, phone_id: int):
-    """
-    Internal helper function to cleanup/release a phone number.
-    Handles both Twilio release and database deletion with proper error handling.
-    """
-    # Get phone number details
+    """Internal helper function to cleanup/release a phone number."""
     phone = db.table('phone_number').select('*').eq('id', phone_id).single().execute()
 
     if not phone.data:
@@ -170,11 +168,9 @@ async def _cleanup_phone_internal(db, phone_id: int):
             numbers[0].delete()
             logger.info(f"Released Twilio number: {phone_data['phone_number']}")
         else:
-            logger.warning(f"Twilio number not found: {phone_data['phone_number']} (may have been already released)")
+            logger.warning(f"Twilio number not found: {phone_data['phone_number']}")
     except Exception as twilio_error:
         logger.error(f"Failed to release Twilio number {phone_data['phone_number']}: {twilio_error}")
-        # Don't raise - continue with DB cleanup even if Twilio fails
-        # The number might have been manually deleted or already released
 
     # Delete from database
     try:
@@ -186,10 +182,16 @@ async def _cleanup_phone_internal(db, phone_id: int):
 
 
 @router.get("/agent/{agent_id}", summary="Get phone number for agent")
-async def get_phone_by_agent(agent_id: int):
-    """Gets phone number assigned to agent"""
+async def get_phone_by_agent(
+    agent_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Gets phone number assigned to agent - user must own the agent"""
     try:
         db = supabase()
+
+        # Verify ownership
+        verify_agent_ownership(db, agent_id, current_user.id)
 
         result = db.table('phone_number').select('*').eq('agent_id', agent_id).execute()
 
@@ -206,15 +208,24 @@ async def get_phone_by_agent(agent_id: int):
 
 
 @router.get("/{phone_id}", summary="Get phone number by ID")
-async def get_phone(phone_id: int):
-    """Gets phone number details by ID"""
+async def get_phone(
+    phone_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Gets phone number details by ID - user must own the associated agent"""
     try:
         db = supabase()
 
-        result = db.table('phone_number').select('*').eq('id', phone_id).single().execute()
+        # Get phone with agent info
+        result = db.table('phone_number').select('*, agent:agent_id(business_id)').eq('id', phone_id).single().execute()
 
         if not result.data:
             raise HTTPException(status_code=404, detail="Phone number not found")
+
+        # Verify ownership through agent
+        agent_id = result.data.get('agent_id')
+        if agent_id:
+            verify_agent_ownership(db, agent_id, current_user.id)
 
         return result.data
 
@@ -226,24 +237,25 @@ async def get_phone(phone_id: int):
 
 
 @router.delete("/{phone_id}", summary="Delete and release phone number")
-async def delete_phone(phone_id: int):
-    """
-    Deletes phone number from database and releases from Twilio.
-
-    This operation will attempt to release the number from Twilio first,
-    then remove it from the database. If Twilio release fails (e.g., number
-    already released), the database deletion will still proceed.
-    """
+async def delete_phone(
+    phone_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Deletes phone number from database and releases from Twilio - user must own the agent"""
     try:
         db = supabase()
 
-        # Verify phone exists before attempting cleanup
+        # Get phone with agent info for ownership check
         phone = db.table('phone_number').select('*').eq('id', phone_id).single().execute()
 
         if not phone.data:
             raise HTTPException(status_code=404, detail="Phone number not found")
 
-        # Use internal cleanup function for consistency
+        # Verify ownership
+        agent_id = phone.data.get('agent_id')
+        if agent_id:
+            verify_agent_ownership(db, agent_id, current_user.id)
+
         try:
             await _cleanup_phone_internal(db, phone_id)
             return {
@@ -265,16 +277,16 @@ async def delete_phone(phone_id: int):
 
 
 @router.delete("/agent/{agent_id}", summary="Delete phone number by agent")
-async def delete_phone_by_agent(agent_id: int):
-    """
-    Deletes phone number assigned to a specific agent.
-
-    This is a convenience endpoint that finds the phone number for an agent
-    and deletes it. Equivalent to looking up the phone_id first and calling
-    DELETE /phone/{phone_id}.
-    """
+async def delete_phone_by_agent(
+    agent_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Deletes phone number assigned to a specific agent - user must own the agent"""
     try:
         db = supabase()
+
+        # Verify ownership
+        verify_agent_ownership(db, agent_id, current_user.id)
 
         # Get phone number for agent
         phone = db.table('phone_number').select('*').eq('agent_id', agent_id).execute()
@@ -285,7 +297,6 @@ async def delete_phone_by_agent(agent_id: int):
         phone_data = phone.data[0]
         phone_id = phone_data['id']
 
-        # Use internal cleanup function for consistency
         try:
             await _cleanup_phone_internal(db, phone_id)
             return {
@@ -304,4 +315,3 @@ async def delete_phone_by_agent(agent_id: int):
     except Exception as e:
         logger.error(f"Error in delete_phone_by_agent: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
