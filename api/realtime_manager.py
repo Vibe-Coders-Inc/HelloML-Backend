@@ -117,12 +117,15 @@ TOOL USAGE GUIDELINES:
         # Get base instructions from agent config
         base_instructions = self.agent_config.get('prompt') or default_prompt
 
-        # Build complete instructions - NO greeting here since we inject it directly
+        # Build complete instructions - include greeting since model will speak it
         instructions = f"""*** CRITICAL INSTRUCTIONS - FOLLOW EXACTLY ***
 
 1. LANGUAGE: You MUST speak ONLY in English. NEVER use Spanish, French, or any other language under any circumstances UNLESS the user speaks to you in that language.
 
-2. GREETING ALREADY SENT: The greeting has already been spoken. Do NOT repeat it. Do NOT say hello again. Just wait for the user to speak and respond naturally.
+2. INITIAL GREETING: When the call first connects (you'll see "[Call connected]"), say EXACTLY this greeting and nothing else: "{self.greeting}"
+   - Say this greeting ONCE and only ONCE
+   - After greeting, wait for the caller to speak
+   - Do NOT repeat the greeting later in the conversation
 
 3. FUNCTION CALLING - YOU HAVE ACCESS TO TWO TOOLS THAT YOU MUST USE:
 
@@ -166,9 +169,9 @@ TOOL USAGE GUIDELINES:
 {base_instructions}
 
 *** REMEMBER ***
-- DO NOT repeat the greeting - it was already said
+- Say your greeting ONCE when you see "[Call connected]", then NEVER repeat it
 - SEARCH 3 TIMES MINIMUM before saying "I don't have that information"
-- Say goodbye message BEFORE calling end_call
+- Say goodbye message "{self.goodbye}" BEFORE calling end_call
 - Be conversational and natural"""
 
         session_config = {
@@ -195,8 +198,8 @@ TOOL USAGE GUIDELINES:
         await self.send_event(session_config)
         print(f"[RealtimeSession] Session configured with semantic_vad and interrupt_response=True")
 
-        # Inject the greeting directly as an assistant message
-        await self._inject_greeting()
+        # Trigger the initial greeting
+        await self._trigger_initial_greeting()
 
     def _get_rag_tool_definition(self) -> Dict[str, Any]:
         """Get the RAG semantic search function tool definition."""
@@ -212,10 +215,8 @@ TOOL USAGE GUIDELINES:
                         "description": "The search query to find relevant information in the knowledge base"
                     }
                 },
-                "required": ["query"],
-                "additionalProperties": False
-            },
-            "strict": True
+                "required": ["query"]
+            }
         }
 
     def _get_end_call_tool_definition(self) -> Dict[str, Any]:
@@ -232,51 +233,41 @@ TOOL USAGE GUIDELINES:
                         "description": "Brief reason for ending the call"
                     }
                 },
-                "required": ["reason"],
-                "additionalProperties": False
-            },
-            "strict": True
+                "required": ["reason"]
+            }
         }
 
-    async def _inject_greeting(self):
+    async def _trigger_initial_greeting(self):
         """
-        Inject the greeting directly as an assistant message.
+        Trigger the initial greeting by sending a call-connected message.
 
-        This avoids the model generating its own greeting which could cause repetition.
-        We add the greeting as a completed assistant message and trigger audio output.
+        The model will respond with the greeting defined in instructions.
+        We use a user message to trigger the model's response since
+        conversation.item.create for assistant messages cannot generate audio.
         """
         try:
-            # Create an assistant message with the greeting text
-            greeting_item = {
+            # Create a user message indicating call connection
+            greeting_trigger = {
                 "type": "conversation.item.create",
                 "item": {
                     "type": "message",
-                    "role": "assistant",
+                    "role": "user",
                     "content": [
                         {
-                            "type": "text",
-                            "text": self.greeting
+                            "type": "input_text",
+                            "text": "[Call connected]"
                         }
                     ]
                 }
             }
-            await self.send_event(greeting_item)
+            await self.send_event(greeting_trigger)
 
-            # Trigger response to convert the text to audio
-            response_event = {
-                "type": "response.create",
-                "response": {
-                    "modalities": ["audio", "text"]
-                }
-            }
-            await self.send_event(response_event)
-            print(f"[RealtimeSession] Injected greeting: {self.greeting}")
-
-            # Save greeting to database
-            await self._save_message('agent', self.greeting)
+            # Trigger response - model will say the greeting from instructions
+            await self.send_event({"type": "response.create"})
+            print(f"[RealtimeSession] Triggered initial greeting")
 
         except Exception as e:
-            print(f"[RealtimeSession] Failed to inject greeting: {e}")
+            print(f"[RealtimeSession] Failed to trigger greeting: {e}")
 
     async def _wait_for_audio_completion(self, timeout: float = 5.0):
         """
@@ -383,10 +374,20 @@ TOOL USAGE GUIDELINES:
         elif event_type == "session.created":
             print(f"[RealtimeSession] Session created: {event.get('session', {}).get('id')}")
 
+        # Session updated confirmation
+        elif event_type == "session.updated":
+            session = event.get("session", {})
+            tools = session.get("tools", [])
+            turn_detection = session.get("turn_detection", {})
+            print(f"[RealtimeSession] Session updated - tools: {[t.get('name') for t in tools]}, turn_detection: {turn_detection.get('type')}")
+
         # Error handling
         elif event_type == "error":
-            error_msg = event.get("error", {}).get("message", "Unknown error")
-            print(f"[RealtimeSession] Error: {error_msg}")
+            error_obj = event.get("error", {})
+            error_msg = error_obj.get("message", "Unknown error")
+            error_code = error_obj.get("code", "unknown")
+            print(f"[RealtimeSession] ERROR [{error_code}]: {error_msg}")
+            print(f"[RealtimeSession] Full error: {error_obj}")
             if self.on_error:
                 await self.on_error(error_msg)
 
