@@ -184,14 +184,21 @@ async def get_subscription(
             try:
                 stripe_sub = stripe.Subscription.retrieve(stripe_sub_id)
 
+                # Convert Unix timestamps to ISO format for PostgreSQL
+                from datetime import datetime, timezone
+                def unix_to_iso(ts):
+                    if ts is None:
+                        return None
+                    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
                 # Update DB with latest from Stripe
                 service_db = get_service_client()
                 service_db.table('subscription').update({
                     'status': stripe_sub.status,
-                    'current_period_start': stripe_sub.current_period_start,
-                    'current_period_end': stripe_sub.current_period_end,
+                    'current_period_start': unix_to_iso(stripe_sub.current_period_start),
+                    'current_period_end': unix_to_iso(stripe_sub.current_period_end),
                     'cancel_at_period_end': stripe_sub.cancel_at_period_end,
-                    'cancel_at': stripe_sub.cancel_at,
+                    'cancel_at': unix_to_iso(stripe_sub.cancel_at),
                     'updated_at': 'now()'
                 }).eq('stripe_subscription_id', stripe_sub_id).execute()
 
