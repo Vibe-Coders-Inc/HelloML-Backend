@@ -68,6 +68,10 @@ class RealtimeSession:
         # Track function call state
         self.pending_function_calls: Dict[str, Dict] = {}
 
+        # Track if we're waiting for goodbye to finish
+        self.waiting_for_goodbye = False
+        self.goodbye_complete = asyncio.Event()
+
     async def connect(self):
         """Connect to OpenAI Realtime API and configure session."""
         # Get model from agent config, use latest GA model as default
@@ -101,219 +105,192 @@ class RealtimeSession:
         # Extract agent configuration
         default_prompt = """You are a helpful AI voice assistant.
 
-                            AVAILABLE TOOLS:
-                            1. search_knowledge_base - Search uploaded documents to find accurate information
-                            2. end_call - End the phone call
+AVAILABLE TOOLS:
+1. search_knowledge_base - Search uploaded documents to find accurate information
+2. end_call - End the phone call
 
-                            TOOL USAGE GUIDELINES:
-                            - Use search_knowledge_base to find information from uploaded documents before answering questions
-                            - Use end_call when: the customer asks to hang up, the conversation is complete, or the issue is fully resolved
-                            - Always be polite, professional, and helpful"""
+TOOL USAGE GUIDELINES:
+- Use search_knowledge_base to find information from uploaded documents before answering questions
+- Use end_call when: the customer asks to hang up, the conversation is complete, or the issue is fully resolved
+- Always be polite, professional, and helpful"""
 
         # Get base instructions from agent config
-        # Use 'or' to handle empty strings, not just None
         base_instructions = self.agent_config.get('prompt') or default_prompt
 
-        # Build complete instructions with directives at the top
+        # Build complete instructions - NO greeting here since we inject it directly
         instructions = f"""*** CRITICAL INSTRUCTIONS - FOLLOW EXACTLY ***
 
-                                1. LANGUAGE: You MUST speak ONLY in English. NEVER use Spanish, French, or any other language under any circumstances UNLESS YOU ARE GETTING RESPONSES IN THAT LANGUAGE.
+1. LANGUAGE: You MUST speak ONLY in English. NEVER use Spanish, French, or any other language under any circumstances UNLESS the user speaks to you in that language.
 
-                                2. FIRST RESPONSE / GREETING: Your very first words when this call starts MUST be EXACTLY: "{self.greeting}"
-                                - Say this greeting immediately and exactly as written
-                                - Do NOT add any introduction, do NOT say "hello" or "hi" first
-                                - After the greeting, wait for the user to respond
+2. GREETING ALREADY SENT: The greeting has already been spoken. Do NOT repeat it. Do NOT say hello again. Just wait for the user to speak and respond naturally.
 
-                                3. FUNCTION CALLING - YOU HAVE ACCESS TO TWO TOOLS THAT YOU MUST USE:
+3. FUNCTION CALLING - YOU HAVE ACCESS TO TWO TOOLS THAT YOU MUST USE:
 
-                                A. search_knowledge_base - *** ABSOLUTE REQUIREMENT: SEARCH BEFORE EVERY ANSWER ***
+   A. search_knowledge_base - *** ABSOLUTE REQUIREMENT: SEARCH BEFORE EVERY ANSWER ***
 
-                                    *** YOU ARE STRICTLY PROHIBITED FROM: ***
-                                    - Using your general knowledge or training data
-                                    - Making assumptions based on common sense
-                                    - Answering ANY question without searching first
-                                    - Giving up after one failed search
+      *** YOU ARE STRICTLY PROHIBITED FROM: ***
+      - Using your general knowledge or training data
+      - Making assumptions based on common sense
+      - Answering ANY question without searching first
+      - Giving up after one failed search
 
-                                    *** MANDATORY SEARCH PROTOCOL: ***
+      *** MANDATORY SEARCH PROTOCOL: ***
 
-                                    RULE 1: SEARCH FIRST, ALWAYS
-                                    Before answering ANY customer question (except greetings/small talk), you MUST:
-                                    1. Call search_knowledge_base with the customer's key terms
-                                    2. If no results: Try AGAIN with DIFFERENT search terms (synonyms, broader terms)
-                                    3. If still no results: Try a THIRD time with simplified keywords
+      RULE 1: SEARCH FIRST, ALWAYS
+      Before answering ANY customer question (except greetings/small talk), you MUST:
+      1. Call search_knowledge_base with the customer's key terms
+      2. If no results: Try AGAIN with DIFFERENT search terms (synonyms, broader terms)
+      3. If still no results: Try a THIRD time with simplified keywords
 
-                                    RULE 2: UPLOADED DOCUMENTS = ONLY SOURCE OF TRUTH
-                                    - Search results are the HOLY GRAIL - the ONLY source you can use
-                                    - NEVER use your general knowledge about businesses, menus, or products
-                                    - If it's not in the search results, you DON'T know it
-                                    - Even if you "know" something from training, IGNORE IT - only use search results
+      RULE 2: UPLOADED DOCUMENTS = ONLY SOURCE OF TRUTH
+      - Search results are the HOLY GRAIL - the ONLY source you can use
+      - NEVER use your general knowledge about businesses, menus, or products
+      - If it's not in the search results, you DON'T know it
 
-                                    RULE 3: SEARCH STRATEGY (try IN ORDER)
-                                    - Attempt 1: Use exact words from customer's question
-                                    - Attempt 2: Use synonyms (e.g., "iced coffee" → "cold coffee", "coffee beverage")
-                                    - Attempt 3: Use category terms (e.g., "drinks", "beverages", "menu items")
+      RULE 3: SEARCH STRATEGY (try IN ORDER)
+      - Attempt 1: Use exact words from customer's question
+      - Attempt 2: Use synonyms (e.g., "iced coffee" → "cold coffee")
+      - Attempt 3: Use category terms (e.g., "drinks", "beverages", "menu items")
 
-                                B. end_call - End the conversation gracefully
-                                    WHEN TO USE:
-                                    - Customer says goodbye, "that's all", "thank you bye", etc.
-                                    - Issue is fully resolved and customer seems satisfied
-                                    - Customer explicitly says they want to hang up
+   B. end_call - End the conversation gracefully
+      WHEN TO USE:
+      - Customer says goodbye, "that's all", "thank you bye", etc.
+      - Issue is fully resolved and customer seems satisfied
+      - Customer explicitly says they want to hang up
 
-                                    HOW TO USE:
-                                    - Call end_call(reason="brief explanation")
-                                    - Example: end_call(reason="Customer inquiry resolved")
-                                    - The goodbye message will be said automatically
+      BEFORE calling end_call, you MUST say your goodbye message: "{self.goodbye}"
+      Then call end_call(reason="brief explanation")
 
-                                4. GOODBYE: When ending the call, say EXACTLY: "{self.goodbye}"
+*** YOUR ROLE ***
 
-                                *** YOUR ROLE ***
+{base_instructions}
 
-                                {base_instructions}
-
-                                *** REMEMBER ***
-                                - SEARCH 3 TIMES MINIMUM before saying "I don't have that information"
-                                - TRY DIFFERENT KEYWORDS: exact terms → synonyms → categories
-                                - UPLOADED DOCUMENTS = ONLY SOURCE - never use general knowledge or training data
-                                - Every factual answer MUST come from search_knowledge_base results
-                                - Be conversational and natural while following these strict search requirements"""
-
-        # Get configuration from agent settings
-        model = self.agent_config.get('model_type') or 'gpt-realtime-2025-08-28'
+*** REMEMBER ***
+- DO NOT repeat the greeting - it was already said
+- SEARCH 3 TIMES MINIMUM before saying "I don't have that information"
+- Say goodbye message BEFORE calling end_call
+- Be conversational and natural"""
 
         session_config = {
             "type": "session.update",
             "session": {
-                "type": "realtime",
                 "instructions": instructions,
                 "tools": [
                     self._get_rag_tool_definition(),
                     self._get_end_call_tool_definition()
                 ],
                 "tool_choice": "auto",
-                "audio": {
-                    "input": {
-                        "transcription": {
-                            "model": "whisper-1"
-                        }
-                    }
+                "input_audio_transcription": {
+                    "model": "whisper-1"
+                },
+                "turn_detection": {
+                    "type": "semantic_vad",
+                    "eagerness": "medium",
+                    "create_response": True,
+                    "interrupt_response": True
                 }
             }
         }
 
         await self.send_event(session_config)
-        print(f"[RealtimeSession] Session configured with model={model}")
+        print(f"[RealtimeSession] Session configured with semantic_vad and interrupt_response=True")
 
-        # Trigger the initial greeting by sending a silent user message
-        await self._trigger_initial_greeting()
+        # Inject the greeting directly as an assistant message
+        await self._inject_greeting()
 
     def _get_rag_tool_definition(self) -> Dict[str, Any]:
         """Get the RAG semantic search function tool definition."""
         return {
             "type": "function",
             "name": "search_knowledge_base",
-            "description": "MANDATORY: Search uploaded documents - the ONLY source of truth. MUST be called before answering ANY factual question about the business. Call multiple times with different queries if first search fails. NEVER answer without searching first.",
+            "description": "MANDATORY: Search uploaded documents - the ONLY source of truth. MUST be called before answering ANY factual question. Call multiple times with different queries if first search fails.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
                         "description": "The search query to find relevant information in the knowledge base"
-                    },
-                    "k": {
-                        "type": "integer",
-                        "description": "Number of relevant chunks to return (default: 10)",
-                        "default": 10
                     }
                 },
-                "required": ["query"]
-            }
+                "required": ["query"],
+                "additionalProperties": False
+            },
+            "strict": True
         }
-    
+
     def _get_end_call_tool_definition(self) -> Dict[str, Any]:
-      """Get the end call function tool definition."""
-      return {
-          "type": "function",
-          "name": "end_call",
-          "description": "End the phone call gracefully when the conversation is complete.",
-          "parameters": {
-              "type": "object",
-              "properties": {
-                  "reason": {
-                      "type": "string",
-                      "description": "The reason for ending the call"
-                  }
-              },
-              "required": ["reason"]
-          }
-      }
+        """Get the end call function tool definition."""
+        return {
+            "type": "function",
+            "name": "end_call",
+            "description": "End the phone call. IMPORTANT: Say your goodbye message to the caller BEFORE calling this function.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Brief reason for ending the call"
+                    }
+                },
+                "required": ["reason"],
+                "additionalProperties": False
+            },
+            "strict": True
+        }
 
-    async def _trigger_initial_greeting(self):
+    async def _inject_greeting(self):
         """
-        Trigger the agent to speak the greeting by sending a fake user input.
+        Inject the greeting directly as an assistant message.
 
-        The OpenAI Realtime API with server VAD waits for user input before responding.
-        We send a minimal user message to trigger the agent's first response (the greeting).
+        This avoids the model generating its own greeting which could cause repetition.
+        We add the greeting as a completed assistant message and trigger audio output.
         """
         try:
-            # Send a conversation item as if the user connected/said hello
-            greeting_trigger = {
+            # Create an assistant message with the greeting text
+            greeting_item = {
                 "type": "conversation.item.create",
                 "item": {
                     "type": "message",
-                    "role": "user",
+                    "role": "assistant",
                     "content": [
                         {
-                            "type": "input_text",
-                            "text": "[Call connected]"
+                            "type": "text",
+                            "text": self.greeting
                         }
                     ]
                 }
             }
-            await self.send_event(greeting_trigger)
+            await self.send_event(greeting_item)
 
-            # Trigger the assistant to respond with the greeting
+            # Trigger response to convert the text to audio
             response_event = {
-                "type": "response.create"
-            }
-            await self.send_event(response_event)
-            print(f"[RealtimeSession] Triggered initial greeting")
-
-        except Exception as e:
-            print(f"[RealtimeSession] Failed to trigger initial greeting: {e}")
-
-    async def _send_goodbye_message(self):
-        """
-        Trigger the agent to say goodbye before ending.
-
-        Since the goodbye directive is in the system instructions, we add a system
-        message to remind the agent to say goodbye, then trigger a response.
-        """
-        try:
-            # Add a system reminder to say goodbye
-            reminder_event = {
-                "type": "conversation.item.create",
-                "item": {
-                    "type": "message",
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": "The call is ending. Say your goodbye message to the caller now."
-                        }
-                    ]
+                "type": "response.create",
+                "response": {
+                    "modalities": ["audio", "text"]
                 }
             }
-            await self.send_event(reminder_event)
-
-            # Trigger response to make the agent say goodbye
-            response_event = {
-                "type": "response.create"
-            }
             await self.send_event(response_event)
-            print(f"[RealtimeSession] Triggered goodbye message (will say: {self.goodbye})")
+            print(f"[RealtimeSession] Injected greeting: {self.greeting}")
+
+            # Save greeting to database
+            await self._save_message('agent', self.greeting)
 
         except Exception as e:
-            print(f"[RealtimeSession] Failed to trigger goodbye message: {e}")
+            print(f"[RealtimeSession] Failed to inject greeting: {e}")
+
+    async def _wait_for_audio_completion(self, timeout: float = 5.0):
+        """
+        Wait for any ongoing audio to finish playing.
+
+        This gives time for the goodbye message to be spoken before disconnecting.
+        """
+        try:
+            # Wait a reasonable time for audio to finish
+            # The model should have already said goodbye before calling end_call
+            await asyncio.sleep(timeout)
+            print(f"[RealtimeSession] Audio completion wait finished")
+        except Exception as e:
+            print(f"[RealtimeSession] Error waiting for audio completion: {e}")
 
     async def send_audio(self, audio_base64: str):
         """
@@ -517,11 +494,9 @@ class RealtimeSession:
         try:
             print(f"[EndCall] Ending call. Reason: {reason}")
 
-            # Send goodbye message before ending call
-            await self._send_goodbye_message()
-
-            # Wait briefly for goodbye audio to play (approximately 3 seconds for typical goodbye message)
-            await asyncio.sleep(3)
+            # The model should have already said goodbye before calling this function
+            # Wait for any audio to finish playing
+            await self._wait_for_audio_completion(timeout=4.0)
 
             # Close Twilio WebSocket connection
             if self.twilio_ws:
