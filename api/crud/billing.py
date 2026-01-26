@@ -209,18 +209,23 @@ async def get_subscription(
                 subscription['current_period_start'] = stripe_sub.current_period_start
                 subscription['current_period_end'] = stripe_sub.current_period_end
 
-            except stripe.error.StripeError:
-                # If Stripe call fails, continue with DB data
-                pass
+            except stripe.error.StripeError as e:
+                # Log error but continue with DB data
+                print(f"[BILLING] Stripe sync error for {stripe_sub_id}: {str(e)}")
+            except Exception as e:
+                print(f"[BILLING] Unexpected error syncing from Stripe: {str(e)}")
 
-        return {
+        result = {
             "subscription": subscription,
             "has_active_subscription": subscription['status'] == 'active'
         }
+        print(f"[BILLING] Returning subscription for business {business_id}: status={subscription.get('status')}, has_active={result['has_active_subscription']}")
+        return result
 
     except HTTPException:
         raise
     except Exception as e:
+        print(f"[BILLING] Error getting subscription: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
