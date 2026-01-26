@@ -72,7 +72,8 @@ async def create_checkout_session(
                 'stripe_customer_id': customer_id
             }).eq('id', request.business_id).execute()
 
-        # Build line items - base price plus metered price if configured
+        # Build line items - base price only
+        # Metered billing (overage) is handled via Stripe Billing Meter events, not checkout
         line_items = [
             {
                 'price': STRIPE_PRICE_ID,
@@ -80,13 +81,7 @@ async def create_checkout_session(
             },
         ]
 
-        # Add metered price for overage billing (must have quantity for metered)
-        if STRIPE_METERED_PRICE_ID:
-            line_items.append({
-                'price': STRIPE_METERED_PRICE_ID,
-            })
-
-        # Create checkout session with base subscription + metered usage
+        # Create checkout session with base subscription
         checkout_session = stripe.checkout.Session.create(
             customer=customer_id,
             payment_method_types=['card'],
