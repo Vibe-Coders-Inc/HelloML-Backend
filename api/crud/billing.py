@@ -170,10 +170,59 @@ async def get_subscription(
         if not biz_result.data:
             raise HTTPException(status_code=404, detail="Business not found")
 
+        business = biz_result.data
+
         # Get subscription from DB
         result = db.table('subscription').select('*').eq('business_id', business_id).order('created_at', desc=True).limit(1).execute()
 
         if not result.data:
+            # No DB record - check if we need to recover from Stripe (webhook may have failed)
+            stripe_customer_id = business.get('stripe_customer_id')
+            if stripe_customer_id:
+                try:
+                    # Check Stripe for subscriptions
+                    stripe_subs = stripe.Subscription.list(customer=stripe_customer_id, limit=1)
+                    if stripe_subs.data:
+                        stripe_sub = stripe_subs.data[0]
+                        # Found a subscription in Stripe - create the missing DB record
+                        from datetime import datetime, timezone
+                        def unix_to_iso(ts):
+                            if ts is None:
+                                return None
+                            return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
+                        service_db = get_service_client()
+                        service_db.table('subscription').insert({
+                            'business_id': business_id,
+                            'stripe_subscription_id': stripe_sub.id,
+                            'stripe_customer_id': stripe_customer_id,
+                            'status': stripe_sub.status,
+                            'current_period_start': unix_to_iso(stripe_sub.current_period_start),
+                            'current_period_end': unix_to_iso(stripe_sub.current_period_end),
+                            'cancel_at_period_end': stripe_sub.cancel_at_period_end,
+                            'cancel_at': unix_to_iso(stripe_sub.cancel_at)
+                        }).execute()
+
+                        print(f"[BILLING] Recovered subscription from Stripe for business {business_id}: {stripe_sub.id}")
+
+                        # Return the recovered subscription
+                        return {
+                            "subscription": {
+                                "id": None,  # Will be assigned by DB
+                                "business_id": business_id,
+                                "stripe_subscription_id": stripe_sub.id,
+                                "stripe_customer_id": stripe_customer_id,
+                                "status": stripe_sub.status,
+                                "current_period_start": unix_to_iso(stripe_sub.current_period_start),
+                                "current_period_end": unix_to_iso(stripe_sub.current_period_end),
+                                "cancel_at_period_end": stripe_sub.cancel_at_period_end,
+                                "cancel_at": unix_to_iso(stripe_sub.cancel_at)
+                            },
+                            "has_active_subscription": stripe_sub.status == 'active'
+                        }
+                except stripe.error.StripeError as e:
+                    print(f"[BILLING] Stripe recovery check failed: {str(e)}")
+
             return {"subscription": None, "has_active_subscription": False}
 
         subscription = result.data[0]
