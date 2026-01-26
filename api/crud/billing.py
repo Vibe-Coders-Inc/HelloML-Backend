@@ -258,14 +258,16 @@ async def get_subscription(
                 cancel_at = stripe_sub.cancel_at
 
                 # Get period dates from subscription items if not at top level
-                period_start = getattr(stripe_sub, 'current_period_start', None)
-                period_end = getattr(stripe_sub, 'current_period_end', None)
+                period_start = stripe_sub.get('current_period_start')
+                period_end = stripe_sub.get('current_period_end')
 
-                # Fallback to items data if not found
-                if period_start is None and stripe_sub.items and stripe_sub.items.data:
-                    item = stripe_sub.items.data[0]
-                    period_start = getattr(item, 'current_period_start', None)
-                    period_end = getattr(item, 'current_period_end', None)
+                # Fallback to items data if not found (use dictionary access)
+                if period_start is None:
+                    items_data = stripe_sub.get("items", {})
+                    if items_data and items_data.get("data"):
+                        item = items_data["data"][0]
+                        period_start = item.get('current_period_start')
+                        period_end = item.get('current_period_end')
 
                 print(f"[BILLING] Raw Stripe values: status={status}, period_start={period_start}, period_end={period_end}, cancel_at={cancel_at}")
 
