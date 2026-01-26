@@ -3,7 +3,11 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
+import stripe
+import os
 from ..auth import get_current_user, AuthenticatedUser, verify_business_ownership
+
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 
 router = APIRouter(prefix="/business", tags=["Business"])
 
@@ -122,6 +126,31 @@ async def delete_business(
     """Deletes business and all associated data - user must own the business"""
     try:
         db = current_user.get_db()
+
+        # First, get the business to check for stripe_customer_id
+        business_result = db.table('business').select('*').eq('id', business_id).single().execute()
+        if not business_result.data:
+            raise HTTPException(status_code=404, detail="Business not found")
+
+        business = business_result.data
+        stripe_customer_id = business.get('stripe_customer_id')
+
+        # Check Stripe directly for active subscriptions
+        if stripe_customer_id:
+            try:
+                stripe_subs = stripe.Subscription.list(
+                    customer=stripe_customer_id,
+                    status='active',
+                    limit=1
+                )
+                if stripe_subs.data:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Cannot delete business with active subscription. Please cancel your subscription first."
+                    )
+            except stripe.error.StripeError as e:
+                print(f"[BUSINESS] Stripe check failed during delete: {str(e)}")
+                # Continue with delete if Stripe check fails - don't block on Stripe errors
 
         # With RLS enabled, this will only succeed if user owns the business
         db.table('business').delete().eq('id', business_id).execute()
