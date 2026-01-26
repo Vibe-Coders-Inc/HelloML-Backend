@@ -191,16 +191,24 @@ async def get_subscription(
                                 return None
                             return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
+                        # Get period dates from subscription items (not top-level)
+                        period_start = None
+                        period_end = None
+                        if stripe_sub.items and stripe_sub.items.data:
+                            item = stripe_sub.items.data[0]
+                            period_start = getattr(item, 'current_period_start', None)
+                            period_end = getattr(item, 'current_period_end', None)
+
                         service_db = get_service_client()
                         insert_result = service_db.table('subscription').insert({
                             'business_id': business_id,
                             'stripe_subscription_id': stripe_sub.id,
                             'stripe_customer_id': stripe_customer_id,
                             'status': stripe_sub.status,
-                            'current_period_start': unix_to_iso(stripe_sub.current_period_start),
-                            'current_period_end': unix_to_iso(stripe_sub.current_period_end),
-                            'cancel_at_period_end': stripe_sub.cancel_at_period_end,
-                            'cancel_at': unix_to_iso(stripe_sub.cancel_at)
+                            'current_period_start': unix_to_iso(period_start),
+                            'current_period_end': unix_to_iso(period_end),
+                            'cancel_at_period_end': getattr(stripe_sub, 'cancel_at_period_end', False),
+                            'cancel_at': unix_to_iso(getattr(stripe_sub, 'cancel_at', None))
                         }).execute()
 
                         print(f"[BILLING] Recovered subscription from Stripe for business {business_id}: {stripe_sub.id}, insert_result: {insert_result}")
@@ -213,10 +221,10 @@ async def get_subscription(
                                 "stripe_subscription_id": stripe_sub.id,
                                 "stripe_customer_id": stripe_customer_id,
                                 "status": stripe_sub.status,
-                                "current_period_start": unix_to_iso(stripe_sub.current_period_start),
-                                "current_period_end": unix_to_iso(stripe_sub.current_period_end),
-                                "cancel_at_period_end": stripe_sub.cancel_at_period_end,
-                                "cancel_at": unix_to_iso(stripe_sub.cancel_at)
+                                "current_period_start": unix_to_iso(period_start),
+                                "current_period_end": unix_to_iso(period_end),
+                                "cancel_at_period_end": getattr(stripe_sub, 'cancel_at_period_end', False),
+                                "cancel_at": unix_to_iso(getattr(stripe_sub, 'cancel_at', None))
                             },
                             "has_active_subscription": stripe_sub.status == 'active'
                         }
