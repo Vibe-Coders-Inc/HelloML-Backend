@@ -192,12 +192,14 @@ async def get_subscription(
                             return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
                         # Get period dates from subscription items (not top-level)
+                        # Use dictionary access since stripe_sub.items is a method
                         period_start = None
                         period_end = None
-                        if stripe_sub.items and stripe_sub.items.data:
-                            item = stripe_sub.items.data[0]
-                            period_start = getattr(item, 'current_period_start', None)
-                            period_end = getattr(item, 'current_period_end', None)
+                        items_data = stripe_sub.get("items", {})
+                        if items_data and items_data.get("data"):
+                            item = items_data["data"][0]
+                            period_start = item.get('current_period_start')
+                            period_end = item.get('current_period_end')
 
                         service_db = get_service_client()
                         insert_result = service_db.table('subscription').insert({
