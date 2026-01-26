@@ -158,6 +158,7 @@ async def get_subscription(
 ):
     """
     Gets the subscription status for a business.
+    Always syncs with Stripe to ensure data is current.
     Returns subscription details if active, or null if no subscription.
     """
     try:
@@ -169,17 +170,116 @@ async def get_subscription(
         if not biz_result.data:
             raise HTTPException(status_code=404, detail="Business not found")
 
-        # Get subscription
+        # Get subscription from DB
         result = db.table('subscription').select('*').eq('business_id', business_id).order('created_at', desc=True).limit(1).execute()
 
         if not result.data:
             return {"subscription": None, "has_active_subscription": False}
 
         subscription = result.data[0]
+        stripe_sub_id = subscription.get('stripe_subscription_id')
+
+        # Sync from Stripe to get latest status
+        if stripe_sub_id:
+            try:
+                stripe_sub = stripe.Subscription.retrieve(stripe_sub_id)
+
+                # Update DB with latest from Stripe
+                service_db = get_service_client()
+                service_db.table('subscription').update({
+                    'status': stripe_sub.status,
+                    'current_period_start': stripe_sub.current_period_start,
+                    'current_period_end': stripe_sub.current_period_end,
+                    'cancel_at_period_end': stripe_sub.cancel_at_period_end,
+                    'updated_at': 'now()'
+                }).eq('stripe_subscription_id', stripe_sub_id).execute()
+
+                # Update local subscription dict with synced values
+                subscription['status'] = stripe_sub.status
+                subscription['cancel_at_period_end'] = stripe_sub.cancel_at_period_end
+                subscription['current_period_start'] = stripe_sub.current_period_start
+                subscription['current_period_end'] = stripe_sub.current_period_end
+
+            except stripe.error.StripeError:
+                # If Stripe call fails, continue with DB data
+                pass
 
         return {
             "subscription": subscription,
             "has_active_subscription": subscription['status'] == 'active'
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/usage/{business_id}", summary="Get usage stats for billing period")
+async def get_usage(
+    business_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """
+    Gets usage statistics for the current billing period.
+    Returns minutes used, included minutes, and overage.
+    """
+    try:
+        db = current_user.get_db()
+
+        # Get subscription to find billing period
+        sub_result = db.table('subscription').select('*').eq('business_id', business_id).eq('status', 'active').execute()
+
+        included_minutes = 100  # Base plan includes 100 minutes
+        period_start = None
+        period_end = None
+
+        if sub_result.data:
+            subscription = sub_result.data[0]
+            period_start = subscription.get('current_period_start')
+            period_end = subscription.get('current_period_end')
+
+        # Get agent for this business
+        agent_result = db.table('agent').select('id').eq('business_id', business_id).execute()
+
+        if not agent_result.data:
+            return {
+                "minutes_used": 0,
+                "included_minutes": included_minutes,
+                "overage_minutes": 0,
+                "period_start": period_start,
+                "period_end": period_end
+            }
+
+        agent_id = agent_result.data[0]['id']
+
+        # Calculate total minutes from completed conversations in this billing period
+        query = db.table('conversation').select('started_at, ended_at').eq('agent_id', agent_id).eq('status', 'completed').not_.is_('ended_at', 'null')
+
+        if period_start:
+            query = query.gte('started_at', period_start)
+
+        conversations = query.execute()
+
+        # Calculate total minutes
+        total_seconds = 0
+        for conv in conversations.data:
+            if conv.get('started_at') and conv.get('ended_at'):
+                from datetime import datetime
+                start = datetime.fromisoformat(conv['started_at'].replace('Z', '+00:00'))
+                end = datetime.fromisoformat(conv['ended_at'].replace('Z', '+00:00'))
+                duration = (end - start).total_seconds()
+                total_seconds += max(0, duration)
+
+        minutes_used = round(total_seconds / 60, 1)
+        overage_minutes = max(0, minutes_used - included_minutes)
+
+        return {
+            "minutes_used": minutes_used,
+            "included_minutes": included_minutes,
+            "overage_minutes": overage_minutes,
+            "period_start": period_start,
+            "period_end": period_end
         }
 
     except HTTPException:
