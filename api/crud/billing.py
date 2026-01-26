@@ -192,7 +192,7 @@ async def get_subscription(
                             return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
                         service_db = get_service_client()
-                        service_db.table('subscription').insert({
+                        insert_result = service_db.table('subscription').insert({
                             'business_id': business_id,
                             'stripe_subscription_id': stripe_sub.id,
                             'stripe_customer_id': stripe_customer_id,
@@ -203,12 +203,12 @@ async def get_subscription(
                             'cancel_at': unix_to_iso(stripe_sub.cancel_at)
                         }).execute()
 
-                        print(f"[BILLING] Recovered subscription from Stripe for business {business_id}: {stripe_sub.id}")
+                        print(f"[BILLING] Recovered subscription from Stripe for business {business_id}: {stripe_sub.id}, insert_result: {insert_result}")
 
                         # Return the recovered subscription
                         return {
                             "subscription": {
-                                "id": None,  # Will be assigned by DB
+                                "id": insert_result.data[0]['id'] if insert_result.data else None,
                                 "business_id": business_id,
                                 "stripe_subscription_id": stripe_sub.id,
                                 "stripe_customer_id": stripe_customer_id,
@@ -220,8 +220,10 @@ async def get_subscription(
                             },
                             "has_active_subscription": stripe_sub.status == 'active'
                         }
-                except stripe.error.StripeError as e:
-                    print(f"[BILLING] Stripe recovery check failed: {str(e)}")
+                except Exception as e:
+                    import traceback
+                    print(f"[BILLING] Subscription recovery failed: {str(e)}")
+                    print(f"[BILLING] Traceback: {traceback.format_exc()}")
 
             return {"subscription": None, "has_active_subscription": False}
 
