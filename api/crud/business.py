@@ -144,10 +144,14 @@ async def delete_business(
                     limit=1
                 )
                 if stripe_subs.data:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Cannot delete business with active subscription. Please cancel your subscription first."
-                    )
+                    sub = stripe_subs.data[0]
+                    # Allow deletion if subscription is pending cancellation
+                    is_pending_cancellation = sub.get('cancel_at_period_end', False) or sub.get('cancel_at') is not None
+                    if not is_pending_cancellation:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Cannot delete business with active subscription. Please cancel your subscription first."
+                        )
             except stripe.error.StripeError as e:
                 print(f"[BUSINESS] Stripe check failed during delete: {str(e)}")
                 # Continue with delete if Stripe check fails - don't block on Stripe errors
