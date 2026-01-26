@@ -191,14 +191,22 @@ async def get_subscription(
                         return None
                     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
-                # Extract values from Stripe object using dict-style access
-                status = stripe_sub['status']
-                period_start = stripe_sub['current_period_start']
-                period_end = stripe_sub['current_period_end']
-                cancel_at_period_end = stripe_sub['cancel_at_period_end']
-                cancel_at = stripe_sub['cancel_at']
+                # Extract values from Stripe object using attribute access
+                status = stripe_sub.status
+                cancel_at_period_end = stripe_sub.cancel_at_period_end
+                cancel_at = stripe_sub.cancel_at
 
-                print(f"[BILLING] Raw Stripe values: period_start={period_start}, period_end={period_end}")
+                # Get period dates from subscription items if not at top level
+                period_start = getattr(stripe_sub, 'current_period_start', None)
+                period_end = getattr(stripe_sub, 'current_period_end', None)
+
+                # Fallback to items data if not found
+                if period_start is None and stripe_sub.items and stripe_sub.items.data:
+                    item = stripe_sub.items.data[0]
+                    period_start = getattr(item, 'current_period_start', None)
+                    period_end = getattr(item, 'current_period_end', None)
+
+                print(f"[BILLING] Raw Stripe values: status={status}, period_start={period_start}, period_end={period_end}, cancel_at={cancel_at}")
 
                 # Update DB with latest from Stripe
                 service_db = get_service_client()
