@@ -191,12 +191,14 @@ async def get_subscription(
                     'current_period_start': stripe_sub.current_period_start,
                     'current_period_end': stripe_sub.current_period_end,
                     'cancel_at_period_end': stripe_sub.cancel_at_period_end,
+                    'cancel_at': stripe_sub.cancel_at,
                     'updated_at': 'now()'
                 }).eq('stripe_subscription_id', stripe_sub_id).execute()
 
                 # Update local subscription dict with synced values
                 subscription['status'] = stripe_sub.status
                 subscription['cancel_at_period_end'] = stripe_sub.cancel_at_period_end
+                subscription['cancel_at'] = stripe_sub.cancel_at
                 subscription['current_period_start'] = stripe_sub.current_period_start
                 subscription['current_period_end'] = stripe_sub.current_period_end
 
