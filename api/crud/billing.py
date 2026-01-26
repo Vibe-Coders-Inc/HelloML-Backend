@@ -191,12 +191,14 @@ async def get_subscription(
                         return None
                     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
-                # Extract values from Stripe object (use get() for safety)
-                status = stripe_sub.get('status') or stripe_sub.status
-                period_start = stripe_sub.get('current_period_start') if hasattr(stripe_sub, 'get') else stripe_sub.current_period_start
-                period_end = stripe_sub.get('current_period_end') if hasattr(stripe_sub, 'get') else stripe_sub.current_period_end
-                cancel_at_period_end = stripe_sub.get('cancel_at_period_end') if hasattr(stripe_sub, 'get') else stripe_sub.cancel_at_period_end
-                cancel_at = stripe_sub.get('cancel_at') if hasattr(stripe_sub, 'get') else stripe_sub.cancel_at
+                # Extract values from Stripe object using dict-style access
+                status = stripe_sub['status']
+                period_start = stripe_sub['current_period_start']
+                period_end = stripe_sub['current_period_end']
+                cancel_at_period_end = stripe_sub['cancel_at_period_end']
+                cancel_at = stripe_sub['cancel_at']
+
+                print(f"[BILLING] Raw Stripe values: period_start={period_start}, period_end={period_end}")
 
                 # Update DB with latest from Stripe
                 service_db = get_service_client()
@@ -216,7 +218,7 @@ async def get_subscription(
                 subscription['current_period_start'] = unix_to_iso(period_start)
                 subscription['current_period_end'] = unix_to_iso(period_end)
 
-                print(f"[BILLING] Synced from Stripe: status={status}, cancel_at_period_end={cancel_at_period_end}, cancel_at={cancel_at}")
+                print(f"[BILLING] Synced from Stripe: status={status}, cancel_at_period_end={cancel_at_period_end}, cancel_at={cancel_at}, period_end={period_end}, period_end_iso={unix_to_iso(period_end)}")
 
             except stripe.error.StripeError as e:
                 print(f"[BILLING] Stripe sync error for {stripe_sub_id}: {str(e)}")
