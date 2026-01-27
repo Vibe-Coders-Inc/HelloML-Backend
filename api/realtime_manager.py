@@ -23,6 +23,7 @@ class RealtimeSession:
         agent_id: int,
         conversation_id: int,
         agent_config: Dict[str, Any],
+        business_info: Optional[Dict[str, Any]] = None,
         on_audio: Optional[Callable] = None,
         on_transcript: Optional[Callable] = None,
         on_error: Optional[Callable] = None,
@@ -53,6 +54,7 @@ class RealtimeSession:
         self.agent_id = agent_id
         self.conversation_id = conversation_id
         self.agent_config = agent_config
+        self.business_info = business_info or {}
         self.on_audio = on_audio
         self.on_transcript = on_transcript
         self.on_error = on_error
@@ -126,8 +128,25 @@ class RealtimeSession:
 
         base_instructions = self.agent_config.get('prompt') or default_prompt
 
+        # Build business context section
+        biz = self.business_info
+        context_lines = []
+        if biz.get('name'):
+            context_lines.append(f"- Business name: {biz['name']}")
+        if biz.get('address'):
+            context_lines.append(f"- Address: {biz['address']}")
+        if biz.get('business_email'):
+            context_lines.append(f"- Contact email: {biz['business_email']}")
+        if biz.get('phone_number'):
+            context_lines.append(f"- Phone number: {biz['phone_number']}")
+        business_context = "\n".join(context_lines) if context_lines else "- No business details available."
+
         instructions = f"""# Role & Objective
-You are a voice customer service agent for a business. Help callers by answering questions using ONLY the uploaded knowledge base documents.
+You are a voice customer service agent for {biz.get('name') or 'a business'}. Help callers by answering questions using ONLY the uploaded knowledge base documents.
+
+# Context
+{business_context}
+You represent this business. When asked who you are, what business this is, or for contact details, use the information above.
 
 # Personality & Tone
 ## Personality

@@ -182,6 +182,18 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int):
         agent_config = agent_data.data
         print(f"[MediaStream] Agent config loaded: {agent_config.get('name', 'unknown')}", flush=True)
 
+        # Fetch business info for context
+        business_info = {}
+        business_id = agent_config.get('business_id')
+        if business_id:
+            try:
+                biz_data = db.table('business').select('name, address, business_email, phone_number').eq('id', business_id).single().execute()
+                if biz_data.data:
+                    business_info = biz_data.data
+                    print(f"[MediaStream] Business info loaded: {business_info.get('name', 'unknown')}", flush=True)
+            except Exception as e:
+                print(f"[MediaStream] Warning: Could not fetch business info: {e}", flush=True)
+
         # Callback to send audio to Twilio
         async def send_audio_to_twilio(openai_audio_base64: str):
             """Convert OpenAI PCM16 24kHz audio to Twilio μ-law 8kHz and send."""
@@ -245,6 +257,7 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int):
                 agent_id=agent_id,
                 conversation_id=conversation_id,
                 agent_config=agent_config,
+                business_info=business_info,
                 on_audio=send_audio_to_twilio,
                 on_error=handle_error,
                 on_interrupt=handle_interrupt,
