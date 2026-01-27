@@ -192,7 +192,7 @@ Sample clarification phrases:
                     self._get_end_call_tool_definition()
                 ],
                 "tool_choice": "auto",
-                "output_modalities": ["audio", "text"],
+                "output_modalities": ["audio"],
                 "audio": {
                     "input": {
                         "format": {
