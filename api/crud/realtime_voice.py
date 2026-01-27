@@ -238,6 +238,17 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int):
         except Exception as e:
             print(f"[MediaStream] Warning: Could not fetch agent phone: {e}", flush=True)
 
+        # Fetch connected tool providers for this business
+        connected_tools = []
+        if business_id:
+            try:
+                tc_data = db.table('tool_connection').select('provider').eq('business_id', business_id).execute()
+                connected_tools = [tc['provider'] for tc in (tc_data.data or [])]
+                if connected_tools:
+                    print(f"[MediaStream] Connected tools: {connected_tools}", flush=True)
+            except Exception as e:
+                print(f"[MediaStream] Warning: Could not fetch tool connections: {e}", flush=True)
+
         # Callback to send audio to Twilio
         async def send_audio_to_twilio(openai_audio_base64: str):
             """Convert OpenAI PCM16 24kHz audio to Twilio μ-law 8kHz and send."""
@@ -310,7 +321,8 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int):
                 call_sid=call_sid,
                 greeting=greeting,
                 goodbye=goodbye,
-                agent_phone=agent_phone
+                agent_phone=agent_phone,
+                connected_tools=connected_tools
             )
             print(f"[MediaStream] Realtime session created successfully", flush=True)
         except Exception as e:

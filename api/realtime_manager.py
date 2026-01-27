@@ -34,6 +34,7 @@ class RealtimeSession:
         greeting: Optional[str] = None,
         goodbye: Optional[str] = None,
         agent_phone: Optional[str] = None,
+        connected_tools: Optional[List[str]] = None,
     ):
         """
         Initialize Realtime Session.
@@ -66,6 +67,7 @@ class RealtimeSession:
         self.greeting = greeting or "Hello! How can I help you today?"
         self.goodbye = goodbye or "Goodbye! Have a great day!"
         self.agent_phone = agent_phone
+        self.connected_tools = connected_tools or []
 
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.api_key = os.getenv("OPENAI_API_KEY")
@@ -150,6 +152,12 @@ class RealtimeSession:
             self._get_rag_tool_definition(),
             self._get_end_call_tool_definition()
         ]
+
+        # Add calendar tools if Google Calendar is connected
+        if 'google-calendar' in self.connected_tools:
+            tools.append(self._get_calendar_check_tool())
+            tools.append(self._get_calendar_create_tool())
+
         tool_names = [t["name"] for t in tools]
 
         tool_instructions = """- Before any tool call, say one short line like "Let me check that for you." Then call the tool immediately."""
@@ -169,6 +177,18 @@ class RealtimeSession:
 ## end_call
 - Call when the caller says goodbye or the conversation is complete.
 - BEFORE calling, say: "{self.goodbye}" """
+
+        if "check_calendar" in tool_names:
+            tool_instructions += """
+
+## check_calendar
+- Call when the caller asks about availability, appointments, or what's on their schedule.
+- Provide a clear summary of the events found.
+
+## create_calendar_event
+- Call when the caller wants to schedule, book, or create an appointment.
+- Confirm the details (what, when) with the caller BEFORE creating the event.
+- After creating, confirm the event was added."""
 
         tool_list_str = ", ".join(tool_names)
 
@@ -302,6 +322,58 @@ Sample clarification phrases:
                     }
                 },
                 "required": ["reason"]
+            }
+        }
+
+    def _get_calendar_check_tool(self) -> Dict[str, Any]:
+        """Return the function tool definition for checking calendar events."""
+        return {
+            "type": "function",
+            "name": "check_calendar",
+            "description": "Check the business's Google Calendar for events on a given date. Returns a list of events with times, titles, and details.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {
+                        "type": "string",
+                        "description": "Date to check in YYYY-MM-DD format (e.g. 2026-01-28)"
+                    }
+                },
+                "required": ["date"]
+            }
+        }
+
+    def _get_calendar_create_tool(self) -> Dict[str, Any]:
+        """Return the function tool definition for creating calendar events."""
+        return {
+            "type": "function",
+            "name": "create_calendar_event",
+            "description": "Create a new event on the business's Google Calendar. Returns confirmation with event details and a link.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "Title of the event (e.g. 'Meeting with John')"
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "Date of the event in YYYY-MM-DD format"
+                    },
+                    "start_time": {
+                        "type": "string",
+                        "description": "Start time in HH:MM format (24-hour, e.g. '14:00')"
+                    },
+                    "end_time": {
+                        "type": "string",
+                        "description": "End time in HH:MM format (24-hour, e.g. '15:00')"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Optional description or notes for the event"
+                    }
+                },
+                "required": ["summary", "date", "start_time", "end_time"]
             }
         }
 
@@ -534,6 +606,13 @@ Sample clarification phrases:
                 reason = args.get("reason", "Conversation completed")
                 result = await self._execute_end_call(reason)
 
+            elif function_name == "check_calendar":
+                date_str = args.get("date", "")
+                result = await self._execute_check_calendar(date_str)
+
+            elif function_name == "create_calendar_event":
+                result = await self._execute_create_calendar_event(args)
+
             else:
                 result = {"error": f"Unknown function: {function_name}"}
 
@@ -645,6 +724,59 @@ Sample clarification phrases:
                 "success": False,
                 "error": str(e)
             }
+
+    async def _execute_check_calendar(self, date_str: str) -> Dict[str, Any]:
+        """Check Google Calendar events for a given date."""
+        try:
+            from api.crud.integrations import list_calendar_events
+
+            business_id = self.agent_config.get('business_id')
+            if not business_id:
+                return {"error": "No business associated with this agent"}
+
+            # Build time range for the full day
+            time_min = f"{date_str}T00:00:00Z"
+            time_max = f"{date_str}T23:59:59Z"
+
+            result = await list_calendar_events(business_id, time_min, time_max)
+            print(f"[Calendar] check_calendar for {date_str}: {result.get('count', 0)} events")
+            return result
+
+        except Exception as e:
+            print(f"[Calendar] Error checking calendar: {e}")
+            return {"error": str(e)}
+
+    async def _execute_create_calendar_event(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a Google Calendar event."""
+        try:
+            from api.crud.integrations import create_calendar_event
+
+            business_id = self.agent_config.get('business_id')
+            if not business_id:
+                return {"error": "No business associated with this agent"}
+
+            date = args.get("date", "")
+            start_time = args.get("start_time", "")
+            end_time = args.get("end_time", "")
+            summary = args.get("summary", "")
+            description = args.get("description", "")
+
+            start_dt = f"{date}T{start_time}:00"
+            end_dt = f"{date}T{end_time}:00"
+
+            result = await create_calendar_event(
+                business_id=business_id,
+                summary=summary,
+                start_datetime=start_dt,
+                end_datetime=end_dt,
+                description=description,
+            )
+            print(f"[Calendar] create_calendar_event: {summary} on {date} {start_time}-{end_time}")
+            return result
+
+        except Exception as e:
+            print(f"[Calendar] Error creating event: {e}")
+            return {"error": str(e)}
 
     async def _save_message(self, role: str, content: str):
         """Save message to database."""
