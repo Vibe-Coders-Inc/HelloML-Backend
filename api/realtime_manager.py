@@ -33,6 +33,7 @@ class RealtimeSession:
         call_sid: Optional[str] = None,
         greeting: Optional[str] = None,
         goodbye: Optional[str] = None,
+        agent_phone: Optional[str] = None,
     ):
         """
         Initialize Realtime Session.
@@ -64,6 +65,7 @@ class RealtimeSession:
         self.call_sid = call_sid
         self.greeting = greeting or "Hello! How can I help you today?"
         self.goodbye = goodbye or "Goodbye! Have a great day!"
+        self.agent_phone = agent_phone
 
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.api_key = os.getenv("OPENAI_API_KEY")
@@ -138,8 +140,37 @@ class RealtimeSession:
         if biz.get('business_email'):
             context_lines.append(f"- Contact email: {biz['business_email']}")
         if biz.get('phone_number'):
-            context_lines.append(f"- Phone number: {biz['phone_number']}")
+            context_lines.append(f"- Business contact phone: {biz['phone_number']}")
+        if self.agent_phone:
+            context_lines.append(f"- Your phone number (the number callers dialed): {self.agent_phone}")
         business_context = "\n".join(context_lines) if context_lines else "- No business details available."
+
+        # Build tools list and dynamic tool instructions
+        tools = [
+            self._get_rag_tool_definition(),
+            self._get_end_call_tool_definition()
+        ]
+        tool_names = [t["name"] for t in tools]
+
+        tool_instructions = """- Before any tool call, say one short line like "Let me check that for you." Then call the tool immediately."""
+
+        if "search_knowledge_base" in tool_names:
+            tool_instructions += """
+
+## search_knowledge_base
+- Call BEFORE answering any factual question.
+- If no results, retry with different search terms (up to 3 attempts).
+- NEVER use your general knowledge or training data - only search results.
+- After 3 failed searches, say you don't have that information."""
+
+        if "end_call" in tool_names:
+            tool_instructions += f"""
+
+## end_call
+- Call when the caller says goodbye or the conversation is complete.
+- BEFORE calling, say: "{self.goodbye}" """
+
+        tool_list_str = ", ".join(tool_names)
 
         instructions = f"""# Role & Objective
 You are a voice customer service agent for {biz.get('name') or 'a business'}. Help callers by answering questions using ONLY the uploaded knowledge base documents.
@@ -147,6 +178,10 @@ You are a voice customer service agent for {biz.get('name') or 'a business'}. He
 # Context
 {business_context}
 You represent this business. When asked who you are, what business this is, or for contact details, use the information above.
+
+# Capabilities
+You have access to the following tools: {tool_list_str}.
+You can ONLY perform actions that your tools allow. If a caller asks you to do something outside your capabilities, let them know what you can help with instead.
 
 # Personality & Tone
 ## Personality
@@ -182,17 +217,7 @@ Sample clarification phrases:
 - "I only heard part of that. What did you say after...?"
 
 # Tools
-- Before any tool call, say one short line like "Let me check that for you." Then call the tool immediately.
-
-## search_knowledge_base
-- Call BEFORE answering any factual question.
-- If no results, retry with different search terms (up to 3 attempts).
-- NEVER use your general knowledge or training data - only search results.
-- After 3 failed searches, say you don't have that information.
-
-## end_call
-- Call when the caller says goodbye or the conversation is complete.
-- BEFORE calling, say: "{self.goodbye}"
+{tool_instructions}
 
 # Instructions
 - NEVER answer factual questions without calling search_knowledge_base first.
@@ -206,10 +231,7 @@ Sample clarification phrases:
             "session": {
                 "type": "realtime",
                 "instructions": instructions,
-                "tools": [
-                    self._get_rag_tool_definition(),
-                    self._get_end_call_tool_definition()
-                ],
+                "tools": tools,
                 "tool_choice": "auto",
                 "output_modalities": ["audio"],
                 "audio": {
@@ -242,7 +264,7 @@ Sample clarification phrases:
         }
 
         await self.send_event(session_config)
-        print(f"[RealtimeSession] Session configured (GA format) with semantic_vad and noise_reduction")
+        print(f"[RealtimeSession] Session configured - tools: {tool_names}, phone: {self.agent_phone}")
 
         # Trigger the initial greeting
         await self._trigger_initial_greeting()
