@@ -7,11 +7,14 @@ and OpenAI Realtime API.
 
 import json
 import asyncio
+from datetime import datetime
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import Response
 from api.database import get_service_client
 from api.realtime_manager import RealtimeSession
 from api.audio_utils import twilio_to_openai, openai_to_twilio
+
+FREE_TRIAL_MINUTES = 5
 
 
 router = APIRouter(prefix="/conversation", tags=["Voice"])
@@ -40,6 +43,37 @@ async def handle_incoming_call(agent_id: int, request: Request):
             )
 
         agent_config = agent_data.data
+
+        # Check if trial is exhausted (no active subscription and >= 5 minutes used)
+        business_id = agent_config.get('business_id')
+        if business_id:
+            sub_data = db.table('subscription').select('status').eq(
+                'business_id', business_id
+            ).in_('status', ['active', 'trialing']).limit(1).execute()
+
+            has_active_sub = bool(sub_data.data)
+
+            if not has_active_sub:
+                # Calculate used minutes from completed conversations
+                convos = db.table('conversation').select(
+                    'started_at, ended_at'
+                ).eq('agent_id', agent_id).not_.is_('ended_at', 'null').execute()
+
+                total_minutes = 0.0
+                for c in (convos.data or []):
+                    try:
+                        start = datetime.fromisoformat(c['started_at'].replace('Z', '+00:00'))
+                        end = datetime.fromisoformat(c['ended_at'].replace('Z', '+00:00'))
+                        total_minutes += (end - start).total_seconds() / 60.0
+                    except (ValueError, TypeError, KeyError):
+                        continue
+
+                if total_minutes >= FREE_TRIAL_MINUTES:
+                    print(f"[TwilioWebhook] Trial exhausted for agent {agent_id}: {total_minutes:.1f} min used", flush=True)
+                    return Response(
+                        content='<Response><Say>Your free trial has ended. Please subscribe to continue using this service. Goodbye.</Say><Hangup/></Response>',
+                        media_type="application/xml"
+                    )
 
         # Create conversation record
         conversation = db.table('conversation').insert({
