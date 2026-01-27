@@ -11,7 +11,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import Response
 from api.database import get_service_client
 from api.realtime_manager import RealtimeSession
-from api.audio_utils import twilio_to_openai, openai_to_twilio  # kept for fallback
+from api.audio_utils import twilio_to_openai, openai_to_twilio
 
 
 router = APIRouter(prefix="/conversation", tags=["Voice"])
@@ -183,20 +183,21 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int):
         print(f"[MediaStream] Agent config loaded: {agent_config.get('name', 'unknown')}", flush=True)
 
         # Callback to send audio to Twilio
-        # OpenAI is configured with audio/pcmu (G.711 μ-law), same as Twilio,
-        # so we pass audio through directly without conversion.
         async def send_audio_to_twilio(openai_audio_base64: str):
-            """Send OpenAI μ-law audio directly to Twilio (no conversion needed)."""
+            """Convert OpenAI PCM16 24kHz audio to Twilio μ-law 8kHz and send."""
             try:
                 if not stream_sid:
                     print("[MediaStream] Warning: stream_sid not set, skipping audio send")
                     return
 
+                # Convert PCM16 24kHz → μ-law 8kHz
+                twilio_audio = openai_to_twilio(openai_audio_base64, source_rate=24000)
+
                 media_event = {
                     "event": "media",
                     "streamSid": stream_sid,
                     "media": {
-                        "payload": openai_audio_base64
+                        "payload": twilio_audio
                     }
                 }
                 await websocket.send_json(media_event)
@@ -289,8 +290,9 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int):
                         realtime_session.update_media_timestamp(timestamp)
 
                     if twilio_audio_base64 and realtime_session:
-                        # Pass μ-law audio directly - OpenAI configured with audio/pcmu
-                        await realtime_session.send_audio(twilio_audio_base64)
+                        # Convert μ-law 8kHz → PCM16 24kHz
+                        openai_audio = twilio_to_openai(twilio_audio_base64, target_rate=24000)
+                        await realtime_session.send_audio(openai_audio)
 
                 # Mark packets as received - pop from session mark queue
                 elif event_type == "mark":

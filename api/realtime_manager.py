@@ -196,7 +196,8 @@ Sample clarification phrases:
                 "audio": {
                     "input": {
                         "format": {
-                            "type": "audio/pcmu"
+                            "type": "audio/pcm",
+                            "rate": 24000
                         },
                         "transcription": {
                             "model": "whisper-1"
@@ -213,7 +214,8 @@ Sample clarification phrases:
                     },
                     "output": {
                         "format": {
-                            "type": "audio/pcmu"
+                            "type": "audio/pcm",
+                            "rate": 24000
                         }
                     }
                 }
