@@ -117,7 +117,7 @@ class RealtimeSession:
             raise
 
     async def _configure_session(self):
-        """Configure the Realtime session with agent settings."""
+        """Configure the Realtime session with agent settings (GA API format)."""
         default_prompt = (
             "You are a helpful AI voice assistant.\n"
             "Answer questions using only the uploaded knowledge base documents.\n"
@@ -127,61 +127,101 @@ class RealtimeSession:
         base_instructions = self.agent_config.get('prompt') or default_prompt
 
         instructions = f"""# Role & Objective
-You are a voice customer service agent. Help callers by answering
-questions using ONLY the uploaded knowledge base documents.
+You are a voice customer service agent for a business. Help callers by answering questions using ONLY the uploaded knowledge base documents.
 
 # Personality & Tone
-- Professional, friendly, concise
-- Speak naturally as in a phone conversation
-- Speak ONLY in English unless the caller uses another language
+## Personality
+Professional, friendly, calm, and approachable customer service assistant.
+
+## Tone
+Warm, concise, confident, never fawning.
+
+## Length
+2-3 sentences per turn.
+
+## Language
+- The conversation will be only in English.
+- Do not respond in any other language even if the user asks.
+- If the user speaks another language, politely explain that support is limited to English.
+
+## Variety
+- Do not repeat the same sentence twice. Vary your responses so it doesn't sound robotic.
 
 # Initial Greeting
 When you see "[Call connected]", say exactly: "{self.greeting}"
-- Say this once, then wait for the caller
-- Never repeat the greeting
+- Say this once, then wait for the caller.
+- NEVER repeat the greeting later in the conversation.
+
+# Unclear Audio
+- Only respond to clear audio or text.
+- If the user's audio is not clear (e.g., ambiguous input, background noise, silent, unintelligible) or if you did not fully hear or understand the user, ask for clarification.
+- Do not include any sound effects or onomatopoeic expressions in your responses.
+
+Sample clarification phrases:
+- "Sorry, I didn't catch that - could you say it again?"
+- "There's some background noise. Please repeat the last part."
+- "I only heard part of that. What did you say after...?"
 
 # Tools
+- Before any tool call, say one short line like "Let me check that for you." Then call the tool immediately.
 
 ## search_knowledge_base
-- Call BEFORE answering any factual question
-- If no results, retry with different search terms (up to 3 attempts)
-- Never use your general knowledge - only search results
-- Before calling, say a brief phrase like "Let me check that for you."
+- Call BEFORE answering any factual question.
+- If no results, retry with different search terms (up to 3 attempts).
+- NEVER use your general knowledge or training data - only search results.
+- After 3 failed searches, say you don't have that information.
 
 ## end_call
-- Call when the caller says goodbye or the conversation is complete
+- Call when the caller says goodbye or the conversation is complete.
 - BEFORE calling, say: "{self.goodbye}"
 
-# Rules
-- Never answer factual questions without searching first
-- After 3 failed searches, say you don't have that information
-- Keep responses concise - this is a phone call, not an essay
+# Instructions
+- NEVER answer factual questions without calling search_knowledge_base first.
+- Keep responses concise - this is a phone call, not an essay.
+- If you don't know, say so. Do not make up answers.
 
 {base_instructions}"""
 
         session_config = {
             "type": "session.update",
             "session": {
+                "type": "realtime",
                 "instructions": instructions,
                 "tools": [
                     self._get_rag_tool_definition(),
                     self._get_end_call_tool_definition()
                 ],
                 "tool_choice": "auto",
-                "input_audio_transcription": {
-                    "model": "whisper-1"
-                },
-                "turn_detection": {
-                    "type": "semantic_vad",
-                    "eagerness": "medium",
-                    "create_response": True,
-                    "interrupt_response": True
+                "output_modalities": ["audio", "text"],
+                "audio": {
+                    "input": {
+                        "format": {
+                            "type": "audio/pcmu"
+                        },
+                        "transcription": {
+                            "model": "whisper-1"
+                        },
+                        "noise_reduction": {
+                            "type": "near_field"
+                        },
+                        "turn_detection": {
+                            "type": "semantic_vad",
+                            "eagerness": "medium",
+                            "create_response": True,
+                            "interrupt_response": True
+                        }
+                    },
+                    "output": {
+                        "format": {
+                            "type": "audio/pcmu"
+                        }
+                    }
                 }
             }
         }
 
         await self.send_event(session_config)
-        print(f"[RealtimeSession] Session configured with semantic_vad and interrupt_response=True")
+        print(f"[RealtimeSession] Session configured (GA format) with semantic_vad and noise_reduction")
 
         # Trigger the initial greeting
         await self._trigger_initial_greeting()
@@ -379,14 +419,20 @@ When you see "[Call connected]", say exactly: "{self.greeting}"
         elif event_type == "session.updated":
             session = event.get("session", {})
             tools = session.get("tools", [])
-            turn_detection = session.get("turn_detection", {})
-            print(f"[RealtimeSession] Session updated - tools: {[t.get('name') for t in tools]}, turn_detection: {turn_detection.get('type')}")
+            audio_cfg = session.get("audio", {})
+            turn_detection = audio_cfg.get("input", {}).get("turn_detection", {})
+            noise_reduction = audio_cfg.get("input", {}).get("noise_reduction", {})
+            print(f"[RealtimeSession] Session updated - tools: {[t.get('name') for t in tools]}, turn_detection: {turn_detection.get('type')}, noise_reduction: {noise_reduction.get('type') if noise_reduction else 'off'}")
 
         # Error handling
         elif event_type == "error":
             error_obj = event.get("error", {})
             error_msg = error_obj.get("message", "Unknown error")
             error_code = error_obj.get("code", "unknown")
+            # Truncation overshoot is expected and harmless — suppress noise
+            if "already shorter than" in error_msg:
+                print(f"[RealtimeSession] Truncation overshoot (harmless): {error_msg}")
+                return
             print(f"[RealtimeSession] ERROR [{error_code}]: {error_msg}")
             print(f"[RealtimeSession] Full error: {error_obj}")
             if self.on_error:
@@ -401,7 +447,10 @@ When you see "[Call connected]", say exactly: "{self.greeting}"
             if elapsed_ms < 0:
                 elapsed_ms = 0
 
-            # Tell OpenAI to truncate the assistant's audio at the point the user interrupted
+            # Use mark_queue length to estimate actual playback position
+            # Each mark corresponds to an audio delta chunk; fewer remaining marks
+            # means more audio has been played. This provides a safer estimate
+            # than raw timestamp math which can overshoot.
             truncate_event = {
                 "type": "conversation.item.truncate",
                 "item_id": self.last_assistant_item,
