@@ -8,7 +8,7 @@ function calling for RAG, and transcript storage.
 import json
 import asyncio
 import websockets
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any, Callable, List
 from api.database import get_service_client
 from api.rag import semantic_search
 from openai import OpenAI
@@ -26,6 +26,8 @@ class RealtimeSession:
         on_audio: Optional[Callable] = None,
         on_transcript: Optional[Callable] = None,
         on_error: Optional[Callable] = None,
+        on_interrupt: Optional[Callable] = None,
+        on_mark: Optional[Callable] = None,
         twilio_ws: Optional[Any] = None,
         call_sid: Optional[str] = None,
         greeting: Optional[str] = None,
@@ -41,6 +43,8 @@ class RealtimeSession:
             on_audio: Callback for audio output (receives base64 PCM16)
             on_transcript: Callback for transcript updates
             on_error: Callback for error handling
+            on_interrupt: Callback to clear Twilio audio buffer on user interruption
+            on_mark: Callback to send a mark event to Twilio for audio tracking
             twilio_ws: Twilio Media Stream WebSocket connection
             call_sid: Twilio call SID for call control
             greeting: Initial greeting message to speak when call starts
@@ -52,6 +56,8 @@ class RealtimeSession:
         self.on_audio = on_audio
         self.on_transcript = on_transcript
         self.on_error = on_error
+        self.on_interrupt = on_interrupt
+        self.on_mark = on_mark
         self.twilio_ws = twilio_ws
         self.call_sid = call_sid
         self.greeting = greeting or "Hello! How can I help you today?"
@@ -71,6 +77,16 @@ class RealtimeSession:
         # Track if we're waiting for goodbye to finish
         self.waiting_for_goodbye = False
         self.goodbye_complete = asyncio.Event()
+
+        # Interrupt handling state
+        self.last_assistant_item: Optional[str] = None
+        self.response_start_timestamp: Optional[int] = None
+        self.latest_media_timestamp: int = 0
+        self.mark_queue: List[str] = []
+
+    def update_media_timestamp(self, timestamp: int):
+        """Update the latest media timestamp from Twilio media events."""
+        self.latest_media_timestamp = timestamp
 
     async def connect(self):
         """Connect to OpenAI Realtime API and configure session."""
@@ -102,77 +118,46 @@ class RealtimeSession:
 
     async def _configure_session(self):
         """Configure the Realtime session with agent settings."""
-        # Extract agent configuration
-        default_prompt = """You are a helpful AI voice assistant.
+        default_prompt = (
+            "You are a helpful AI voice assistant.\n"
+            "Answer questions using only the uploaded knowledge base documents.\n"
+            "Always be polite, professional, and helpful."
+        )
 
-AVAILABLE TOOLS:
-1. search_knowledge_base - Search uploaded documents to find accurate information
-2. end_call - End the phone call
-
-TOOL USAGE GUIDELINES:
-- Use search_knowledge_base to find information from uploaded documents before answering questions
-- Use end_call when: the customer asks to hang up, the conversation is complete, or the issue is fully resolved
-- Always be polite, professional, and helpful"""
-
-        # Get base instructions from agent config
         base_instructions = self.agent_config.get('prompt') or default_prompt
 
-        # Build complete instructions - include greeting since model will speak it
-        instructions = f"""*** CRITICAL INSTRUCTIONS - FOLLOW EXACTLY ***
+        instructions = f"""# Role & Objective
+You are a voice customer service agent. Help callers by answering
+questions using ONLY the uploaded knowledge base documents.
 
-1. LANGUAGE: You MUST speak ONLY in English. NEVER use Spanish, French, or any other language under any circumstances UNLESS the user speaks to you in that language.
+# Personality & Tone
+- Professional, friendly, concise
+- Speak naturally as in a phone conversation
+- Speak ONLY in English unless the caller uses another language
 
-2. INITIAL GREETING: When the call first connects (you'll see "[Call connected]"), say EXACTLY this greeting and nothing else: "{self.greeting}"
-   - Say this greeting ONCE and only ONCE
-   - After greeting, wait for the caller to speak
-   - Do NOT repeat the greeting later in the conversation
+# Initial Greeting
+When you see "[Call connected]", say exactly: "{self.greeting}"
+- Say this once, then wait for the caller
+- Never repeat the greeting
 
-3. FUNCTION CALLING - YOU HAVE ACCESS TO TWO TOOLS THAT YOU MUST USE:
+# Tools
 
-   A. search_knowledge_base - *** ABSOLUTE REQUIREMENT: SEARCH BEFORE EVERY ANSWER ***
+## search_knowledge_base
+- Call BEFORE answering any factual question
+- If no results, retry with different search terms (up to 3 attempts)
+- Never use your general knowledge - only search results
+- Before calling, say a brief phrase like "Let me check that for you."
 
-      *** YOU ARE STRICTLY PROHIBITED FROM: ***
-      - Using your general knowledge or training data
-      - Making assumptions based on common sense
-      - Answering ANY question without searching first
-      - Giving up after one failed search
+## end_call
+- Call when the caller says goodbye or the conversation is complete
+- BEFORE calling, say: "{self.goodbye}"
 
-      *** MANDATORY SEARCH PROTOCOL: ***
+# Rules
+- Never answer factual questions without searching first
+- After 3 failed searches, say you don't have that information
+- Keep responses concise - this is a phone call, not an essay
 
-      RULE 1: SEARCH FIRST, ALWAYS
-      Before answering ANY customer question (except greetings/small talk), you MUST:
-      1. Call search_knowledge_base with the customer's key terms
-      2. If no results: Try AGAIN with DIFFERENT search terms (synonyms, broader terms)
-      3. If still no results: Try a THIRD time with simplified keywords
-
-      RULE 2: UPLOADED DOCUMENTS = ONLY SOURCE OF TRUTH
-      - Search results are the HOLY GRAIL - the ONLY source you can use
-      - NEVER use your general knowledge about businesses, menus, or products
-      - If it's not in the search results, you DON'T know it
-
-      RULE 3: SEARCH STRATEGY (try IN ORDER)
-      - Attempt 1: Use exact words from customer's question
-      - Attempt 2: Use synonyms (e.g., "iced coffee" → "cold coffee")
-      - Attempt 3: Use category terms (e.g., "drinks", "beverages", "menu items")
-
-   B. end_call - End the conversation gracefully
-      WHEN TO USE:
-      - Customer says goodbye, "that's all", "thank you bye", etc.
-      - Issue is fully resolved and customer seems satisfied
-      - Customer explicitly says they want to hang up
-
-      BEFORE calling end_call, you MUST say your goodbye message: "{self.goodbye}"
-      Then call end_call(reason="brief explanation")
-
-*** YOUR ROLE ***
-
-{base_instructions}
-
-*** REMEMBER ***
-- Say your greeting ONCE when you see "[Call connected]", then NEVER repeat it
-- SEARCH 3 TIMES MINIMUM before saying "I don't have that information"
-- Say goodbye message "{self.goodbye}" BEFORE calling end_call
-- Be conversational and natural"""
+{base_instructions}"""
 
         session_config = {
             "type": "session.update",
@@ -202,17 +187,17 @@ TOOL USAGE GUIDELINES:
         await self._trigger_initial_greeting()
 
     def _get_rag_tool_definition(self) -> Dict[str, Any]:
-        """Get the RAG semantic search function tool definition."""
+        """Return the function tool definition for knowledge base semantic search."""
         return {
             "type": "function",
             "name": "search_knowledge_base",
-            "description": "MANDATORY: Search uploaded documents - the ONLY source of truth. MUST be called before answering ANY factual question. Call multiple times with different queries if first search fails.",
+            "description": "Search the business's uploaded knowledge base documents using semantic similarity. Returns matching text chunks ranked by relevance score, or a not-found message if no matches exist.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "The search query to find relevant information in the knowledge base"
+                        "description": "Natural language search query to match against document content"
                     }
                 },
                 "required": ["query"]
@@ -220,17 +205,17 @@ TOOL USAGE GUIDELINES:
         }
 
     def _get_end_call_tool_definition(self) -> Dict[str, Any]:
-        """Get the end call function tool definition."""
+        """Return the function tool definition for terminating the active call."""
         return {
             "type": "function",
             "name": "end_call",
-            "description": "End the phone call. IMPORTANT: Say your goodbye message to the caller BEFORE calling this function.",
+            "description": "Terminate the active phone call and disconnect all parties. Returns a success or failure status with a message.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "reason": {
                         "type": "string",
-                        "description": "Brief reason for ending the call"
+                        "description": "Brief explanation of why the call is ending"
                     }
                 },
                 "required": ["reason"]
@@ -344,6 +329,22 @@ TOOL USAGE GUIDELINES:
             if audio_base64 and self.on_audio:
                 await self.on_audio(audio_base64)
 
+            # Track the assistant item for interrupt/truncation
+            item_id = event.get("item_id")
+            if item_id:
+                self.last_assistant_item = item_id
+                if self.response_start_timestamp is None:
+                    self.response_start_timestamp = self.latest_media_timestamp
+
+                # Send a mark to Twilio so we can track playback position
+                if self.on_mark:
+                    self.mark_queue.append("responsePart")
+                    await self.on_mark()
+
+        # User started speaking - handle interrupt
+        elif event_type == "input_audio_buffer.speech_started":
+            await self._handle_speech_started()
+
         # User speech transcript
         elif event_type == "conversation.item.input_audio_transcription.completed":
             transcript = event.get("transcript", "")
@@ -390,6 +391,34 @@ TOOL USAGE GUIDELINES:
             print(f"[RealtimeSession] Full error: {error_obj}")
             if self.on_error:
                 await self.on_error(error_msg)
+
+    async def _handle_speech_started(self):
+        """Handle user speech interruption - truncate assistant audio and clear Twilio buffer."""
+        print(f"[RealtimeSession] User speech detected - interrupting")
+
+        if self.last_assistant_item and self.response_start_timestamp is not None:
+            elapsed_ms = self.latest_media_timestamp - self.response_start_timestamp
+            if elapsed_ms < 0:
+                elapsed_ms = 0
+
+            # Tell OpenAI to truncate the assistant's audio at the point the user interrupted
+            truncate_event = {
+                "type": "conversation.item.truncate",
+                "item_id": self.last_assistant_item,
+                "content_index": 0,
+                "audio_end_ms": elapsed_ms
+            }
+            await self.send_event(truncate_event)
+            print(f"[RealtimeSession] Sent truncate for item {self.last_assistant_item} at {elapsed_ms}ms")
+
+        # Clear Twilio's audio buffer so queued audio stops immediately
+        if self.on_interrupt:
+            await self.on_interrupt()
+
+        # Reset interrupt tracking state
+        self.mark_queue.clear()
+        self.last_assistant_item = None
+        self.response_start_timestamp = None
 
     async def _handle_function_call(self, item: Dict[str, Any]):
         """Handle function call from OpenAI (RAG search, end_call)."""

@@ -206,6 +206,32 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int):
             except Exception as e:
                 print(f"[MediaStream] Error sending audio to Twilio: {e}")
 
+        # Callback to clear Twilio audio buffer on user interruption
+        async def handle_interrupt():
+            """Send clear event to Twilio to stop queued audio immediately."""
+            try:
+                if stream_sid:
+                    await websocket.send_json({
+                        "event": "clear",
+                        "streamSid": stream_sid
+                    })
+                    print(f"[MediaStream] Sent clear event to Twilio")
+            except Exception as e:
+                print(f"[MediaStream] Error sending clear to Twilio: {e}")
+
+        # Callback to send mark event to Twilio for audio playback tracking
+        async def handle_mark():
+            """Send mark event to Twilio to track audio playback position."""
+            try:
+                if stream_sid:
+                    await websocket.send_json({
+                        "event": "mark",
+                        "streamSid": stream_sid,
+                        "mark": {"name": "responsePart"}
+                    })
+            except Exception as e:
+                print(f"[MediaStream] Error sending mark to Twilio: {e}")
+
         # Callback for error handling
         async def handle_error(error_msg: str):
             print(f"[MediaStream] Realtime API error: {error_msg}", flush=True)
@@ -223,6 +249,8 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int):
                 agent_config=agent_config,
                 on_audio=send_audio_to_twilio,
                 on_error=handle_error,
+                on_interrupt=handle_interrupt,
+                on_mark=handle_mark,
                 twilio_ws=websocket,
                 call_sid=call_sid,
                 greeting=greeting,
@@ -258,6 +286,11 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int):
                     media = event.get("media", {})
                     twilio_audio_base64 = media.get("payload")
 
+                    # Update media timestamp for interrupt tracking
+                    timestamp = int(media.get("timestamp", 0))
+                    if realtime_session:
+                        realtime_session.update_media_timestamp(timestamp)
+
                     if twilio_audio_base64 and realtime_session:
                         # Convert μ-law 8kHz → PCM16 24kHz
                         openai_audio = twilio_to_openai(twilio_audio_base64, target_rate=24000)
@@ -265,10 +298,10 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int):
                         # Send to OpenAI Realtime API
                         await realtime_session.send_audio(openai_audio)
 
-                # Mark packets as received (required by Twilio)
+                # Mark packets as received - pop from session mark queue
                 elif event_type == "mark":
-                    mark_name = event.get("mark", {}).get("name")
-                    # print(f"[MediaStream] Mark received: {mark_name}")
+                    if realtime_session and realtime_session.mark_queue:
+                        realtime_session.mark_queue.pop(0)
 
                 # Stream stopped
                 elif event_type == "stop":
