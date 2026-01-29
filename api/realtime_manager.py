@@ -35,6 +35,7 @@ class RealtimeSession:
         goodbye: Optional[str] = None,
         agent_phone: Optional[str] = None,
         connected_tools: Optional[List[str]] = None,
+        tool_settings: Optional[Dict[str, Dict]] = None,
     ):
         """
         Initialize Realtime Session.
@@ -52,6 +53,7 @@ class RealtimeSession:
             call_sid: Twilio call SID for call control
             greeting: Initial greeting message to speak when call starts
             goodbye: Farewell message to speak before call ends
+            tool_settings: Settings for connected tools, keyed by provider
         """
         self.agent_id = agent_id
         self.conversation_id = conversation_id
@@ -68,6 +70,7 @@ class RealtimeSession:
         self.goodbye = goodbye or "Goodbye! Have a great day!"
         self.agent_phone = agent_phone
         self.connected_tools = connected_tools or []
+        self.tool_settings = tool_settings or {}
 
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.api_key = os.getenv("OPENAI_API_KEY")
@@ -179,7 +182,14 @@ class RealtimeSession:
 - BEFORE calling, say: "{self.goodbye}" """
 
         if "check_calendar" in tool_names:
-            tool_instructions += """
+            cal_settings = self.tool_settings.get('google-calendar', {})
+            default_duration = cal_settings.get('default_duration', 30)
+            allow_conflicts = cal_settings.get('allow_conflicts', False)
+            booking_window = cal_settings.get('booking_window_days', 30)
+            biz_start = cal_settings.get('business_hours_start', '09:00')
+            biz_end = cal_settings.get('business_hours_end', '17:00')
+
+            tool_instructions += f"""
 
 ## check_calendar
 - Call when the caller asks about availability, appointments, or what's on their schedule.
@@ -188,6 +198,10 @@ class RealtimeSession:
 ## create_calendar_event
 - Call when the caller wants to schedule, book, or create an appointment.
 - Confirm the details (what, when) with the caller BEFORE creating the event.
+- Default appointment duration: {default_duration} minutes (use this if caller doesn't specify).
+- Business hours: {biz_start} to {biz_end}. Do not book appointments outside these hours.
+- Booking window: up to {booking_window} days in advance.
+- {"Conflicts are allowed." if allow_conflicts else "Do not book over existing events (check calendar first)."}
 - After creating, confirm the event was added."""
 
         tool_list_str = ", ".join(tool_names)
@@ -747,19 +761,71 @@ Sample clarification phrases:
             return {"error": str(e)}
 
     async def _execute_create_calendar_event(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a Google Calendar event."""
+        """Create a Google Calendar event with settings enforcement."""
         try:
-            from api.crud.integrations import create_calendar_event
+            from api.crud.integrations import create_calendar_event, list_calendar_events
+            from datetime import datetime, timedelta
 
             business_id = self.agent_config.get('business_id')
             if not business_id:
                 return {"error": "No business associated with this agent"}
+
+            # Get calendar settings
+            cal_settings = self.tool_settings.get('google-calendar', {})
+            default_duration = cal_settings.get('default_duration', 30)
+            allow_conflicts = cal_settings.get('allow_conflicts', False)
+            booking_window = cal_settings.get('booking_window_days', 30)
+            biz_start = cal_settings.get('business_hours_start', '09:00')
+            biz_end = cal_settings.get('business_hours_end', '17:00')
 
             date = args.get("date", "")
             start_time = args.get("start_time", "")
             end_time = args.get("end_time", "")
             summary = args.get("summary", "")
             description = args.get("description", "")
+
+            # Apply default duration if no end_time provided
+            if not end_time and start_time:
+                start_parts = start_time.split(':')
+                if len(start_parts) == 2:
+                    start_hour = int(start_parts[0])
+                    start_min = int(start_parts[1])
+                    end_total_min = start_hour * 60 + start_min + default_duration
+                    end_hour = end_total_min // 60
+                    end_min = end_total_min % 60
+                    end_time = f"{end_hour:02d}:{end_min:02d}"
+                    print(f"[Calendar] Applied default duration {default_duration}min: end_time={end_time}")
+
+            # Validate business hours
+            if start_time < biz_start or end_time > biz_end:
+                return {
+                    "error": f"Appointment must be within business hours ({biz_start} to {biz_end}). Please choose a different time."
+                }
+
+            # Validate booking window
+            try:
+                event_date = datetime.strptime(date, "%Y-%m-%d").date()
+                today = datetime.now().date()
+                days_ahead = (event_date - today).days
+                if days_ahead > booking_window:
+                    return {
+                        "error": f"Cannot book more than {booking_window} days in advance. Please choose an earlier date."
+                    }
+                if days_ahead < 0:
+                    return {"error": "Cannot book appointments in the past."}
+            except ValueError:
+                pass  # If date parsing fails, let the calendar API handle it
+
+            # Check for conflicts if not allowed
+            if not allow_conflicts:
+                time_min = f"{date}T{start_time}:00Z"
+                time_max = f"{date}T{end_time}:00Z"
+                existing = await list_calendar_events(business_id, time_min, time_max)
+                if existing.get('events') and len(existing['events']) > 0:
+                    conflicting = existing['events'][0]
+                    return {
+                        "error": f"There's already an appointment at that time: '{conflicting.get('summary', 'Event')}' from {conflicting.get('start')} to {conflicting.get('end')}. Please choose a different time."
+                    }
 
             start_dt = f"{date}T{start_time}:00"
             end_dt = f"{date}T{end_time}:00"

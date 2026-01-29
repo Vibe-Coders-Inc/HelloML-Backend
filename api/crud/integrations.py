@@ -135,7 +135,7 @@ async def list_connections(
     verify_business_ownership(db, business_id, current_user.id)
 
     result = db.table("tool_connection").select(
-        "id, provider, account_email, created_at"
+        "id, provider, account_email, settings, created_at"
     ).eq("business_id", business_id).execute()
 
     return {"connections": result.data or []}
@@ -157,6 +157,61 @@ async def disconnect_tool(
 
     print(f"[Integrations] Disconnected {provider} for business {business_id}")
     return {"status": "disconnected"}
+
+
+@router.patch("/{business_id}/connections/{provider}/settings", summary="Update tool settings")
+async def update_tool_settings(
+    business_id: int,
+    provider: str,
+    body: dict,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Update settings for a tool connection."""
+    db = current_user.get_db()
+    verify_business_ownership(db, business_id, current_user.id)
+
+    settings = body.get("settings", {})
+
+    result = db.table("tool_connection").update({
+        "settings": settings,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("business_id", business_id).eq("provider", provider).execute()
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Connection not found")
+
+    print(f"[Integrations] Updated settings for {provider} (business {business_id}): {settings}")
+    return {"status": "updated", "settings": settings}
+
+
+# ── Tool Settings Helpers (used by voice agent) ──────────────────
+
+
+def get_tool_settings(business_id: int, provider: str) -> dict:
+    """Get settings for a specific tool connection."""
+    db = get_service_client()
+    result = db.table("tool_connection").select("settings").eq(
+        "business_id", business_id
+    ).eq("provider", provider).single().execute()
+
+    if not result.data:
+        return {}
+
+    return result.data.get("settings") or {}
+
+
+def get_all_tool_settings(business_id: int) -> dict:
+    """Get settings for all tool connections for a business, keyed by provider."""
+    db = get_service_client()
+    result = db.table("tool_connection").select(
+        "provider, settings"
+    ).eq("business_id", business_id).execute()
+
+    settings_by_provider = {}
+    for conn in (result.data or []):
+        settings_by_provider[conn["provider"]] = conn.get("settings") or {}
+
+    return settings_by_provider
 
 
 # ── Google Calendar Helpers (used by voice agent) ────────────────

@@ -238,14 +238,19 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int):
         except Exception as e:
             print(f"[MediaStream] Warning: Could not fetch agent phone: {e}", flush=True)
 
-        # Fetch connected tool providers for this business
+        # Fetch connected tool providers and their settings for this business
         connected_tools = []
+        tool_settings = {}
         if business_id:
             try:
-                tc_data = db.table('tool_connection').select('provider').eq('business_id', business_id).execute()
-                connected_tools = [tc['provider'] for tc in (tc_data.data or [])]
+                tc_data = db.table('tool_connection').select('provider, settings').eq('business_id', business_id).execute()
+                for tc in (tc_data.data or []):
+                    provider = tc['provider']
+                    connected_tools.append(provider)
+                    tool_settings[provider] = tc.get('settings') or {}
                 if connected_tools:
                     print(f"[MediaStream] Connected tools: {connected_tools}", flush=True)
+                    print(f"[MediaStream] Tool settings: {tool_settings}", flush=True)
             except Exception as e:
                 print(f"[MediaStream] Warning: Could not fetch tool connections: {e}", flush=True)
 
@@ -322,7 +327,8 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int):
                 greeting=greeting,
                 goodbye=goodbye,
                 agent_phone=agent_phone,
-                connected_tools=connected_tools
+                connected_tools=connected_tools,
+                tool_settings=tool_settings
             )
             print(f"[MediaStream] Realtime session created successfully", flush=True)
         except Exception as e:
