@@ -23,9 +23,9 @@ GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://helloml.app")
 
 GOOGLE_SCOPES = [
-    "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/calendar.app.created",
+    "https://www.googleapis.com/auth/calendar.freebusy",
 ]
 
 
@@ -216,9 +216,14 @@ def get_all_tool_settings(business_id: int) -> dict:
 
 # ── Google Calendar Helpers (used by voice agent) ────────────────
 
+HELLOML_CALENDAR_NAME = "HelloML Appointments"
 
-async def get_google_access_token(business_id: int) -> str:
-    """Load Google tokens from DB, refresh if expired, return valid access token."""
+
+async def get_google_access_token(business_id: int) -> tuple[str, dict]:
+    """
+    Load Google tokens from DB, refresh if expired.
+    Returns (access_token, connection_record).
+    """
     db = get_service_client()
     result = db.table("tool_connection").select("*").eq(
         "business_id", business_id
@@ -266,29 +271,123 @@ async def get_google_access_token(business_id: int) -> str:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }).eq("business_id", business_id).eq("provider", "google-calendar").execute()
 
+            conn["access_token"] = access_token
             print(f"[Integrations] Refreshed Google token for business {business_id}")
         else:
             print(f"[Integrations] Token refresh failed: {resp.text}")
             raise ValueError("Failed to refresh Google token")
 
-    return access_token
+    return access_token, conn
+
+
+async def get_or_create_helloml_calendar(business_id: int) -> str:
+    """
+    Get the HelloML calendar ID for a business, creating it if needed.
+    The calendar ID is stored in the connection's settings.
+    """
+    access_token, conn = await get_google_access_token(business_id)
+    settings = conn.get("settings") or {}
+
+    # Return cached calendar ID if we have it
+    if settings.get("calendar_id"):
+        return settings["calendar_id"]
+
+    # Create a new secondary calendar
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://www.googleapis.com/calendar/v3/calendars",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "summary": HELLOML_CALENDAR_NAME,
+                "description": "Appointments scheduled via HelloML voice agent",
+                "timeZone": "America/Chicago",
+            },
+        )
+
+    if resp.status_code not in (200, 201):
+        raise ValueError(f"Failed to create calendar: {resp.status_code} - {resp.text}")
+
+    calendar_id = resp.json()["id"]
+
+    # Store calendar ID in settings
+    settings["calendar_id"] = calendar_id
+    db = get_service_client()
+    db.table("tool_connection").update({
+        "settings": settings,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("business_id", business_id).eq("provider", "google-calendar").execute()
+
+    print(f"[Integrations] Created HelloML calendar for business {business_id}: {calendar_id}")
+    return calendar_id
+
+
+async def check_availability(
+    business_id: int,
+    time_min: str,
+    time_max: str,
+    timezone_str: str = "America/Chicago",
+) -> dict:
+    """
+    Check availability using the freebusy API.
+    Returns busy time slots within the given range.
+    """
+    access_token, conn = await get_google_access_token(business_id)
+    account_email = conn.get("account_email")
+
+    if not account_email:
+        return {"error": "No account email found for this connection"}
+
+    # Query freebusy for the user's primary calendar
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://www.googleapis.com/calendar/v3/freeBusy",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "timeMin": time_min,
+                "timeMax": time_max,
+                "timeZone": timezone_str,
+                "items": [{"id": account_email}],
+            },
+        )
+
+    if resp.status_code != 200:
+        return {"error": f"Freebusy API error: {resp.status_code}", "detail": resp.text}
+
+    data = resp.json()
+    calendars = data.get("calendars", {})
+    calendar_data = calendars.get(account_email, {})
+    busy_slots = calendar_data.get("busy", [])
+
+    return {
+        "busy": busy_slots,
+        "count": len(busy_slots),
+        "time_min": time_min,
+        "time_max": time_max,
+    }
 
 
 async def list_calendar_events(business_id: int, time_min: str, time_max: str) -> dict:
-    """List events from the user's primary Google Calendar."""
-    access_token = await get_google_access_token(business_id)
+    """List events from the HelloML calendar (appointments we created)."""
+    access_token, _ = await get_google_access_token(business_id)
+    calendar_id = await get_or_create_helloml_calendar(business_id)
 
     params = {
         "timeMin": time_min,
         "timeMax": time_max,
         "singleEvents": "true",
         "orderBy": "startTime",
-        "maxResults": "20",
+        "maxResults": "50",
     }
 
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+            f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events",
             headers={"Authorization": f"Bearer {access_token}"},
             params=params,
         )
@@ -300,6 +399,7 @@ async def list_calendar_events(business_id: int, time_min: str, time_max: str) -
     events = []
     for item in data.get("items", []):
         events.append({
+            "id": item.get("id"),
             "summary": item.get("summary", "(No title)"),
             "start": item.get("start", {}).get("dateTime") or item.get("start", {}).get("date"),
             "end": item.get("end", {}).get("dateTime") or item.get("end", {}).get("date"),
@@ -318,8 +418,9 @@ async def create_calendar_event(
     description: str = "",
     timezone_str: str = "America/Chicago",
 ) -> dict:
-    """Create an event on the user's primary Google Calendar."""
-    access_token = await get_google_access_token(business_id)
+    """Create an event on the HelloML calendar."""
+    access_token, _ = await get_google_access_token(business_id)
+    calendar_id = await get_or_create_helloml_calendar(business_id)
 
     event_body = {
         "summary": summary,
@@ -337,7 +438,7 @@ async def create_calendar_event(
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
-            "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+            f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events",
             headers={
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json",
@@ -351,8 +452,77 @@ async def create_calendar_event(
     created = resp.json()
     return {
         "status": "created",
+        "id": created.get("id"),
         "summary": created.get("summary"),
         "start": created.get("start", {}).get("dateTime"),
         "end": created.get("end", {}).get("dateTime"),
         "link": created.get("htmlLink"),
     }
+
+
+async def update_calendar_event(
+    business_id: int,
+    event_id: str,
+    summary: str = None,
+    start_datetime: str = None,
+    end_datetime: str = None,
+    description: str = None,
+    timezone_str: str = "America/Chicago",
+) -> dict:
+    """Update an event on the HelloML calendar."""
+    access_token, _ = await get_google_access_token(business_id)
+    calendar_id = await get_or_create_helloml_calendar(business_id)
+
+    # Build patch body with only provided fields
+    event_body = {}
+    if summary is not None:
+        event_body["summary"] = summary
+    if start_datetime is not None:
+        event_body["start"] = {"dateTime": start_datetime, "timeZone": timezone_str}
+    if end_datetime is not None:
+        event_body["end"] = {"dateTime": end_datetime, "timeZone": timezone_str}
+    if description is not None:
+        event_body["description"] = description
+
+    if not event_body:
+        return {"error": "No fields to update"}
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.patch(
+            f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events/{event_id}",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json=event_body,
+        )
+
+    if resp.status_code != 200:
+        return {"error": f"Failed to update event: {resp.status_code}", "detail": resp.text}
+
+    updated = resp.json()
+    return {
+        "status": "updated",
+        "id": updated.get("id"),
+        "summary": updated.get("summary"),
+        "start": updated.get("start", {}).get("dateTime"),
+        "end": updated.get("end", {}).get("dateTime"),
+        "link": updated.get("htmlLink"),
+    }
+
+
+async def delete_calendar_event(business_id: int, event_id: str) -> dict:
+    """Delete an event from the HelloML calendar."""
+    access_token, _ = await get_google_access_token(business_id)
+    calendar_id = await get_or_create_helloml_calendar(business_id)
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.delete(
+            f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events/{event_id}",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+
+    if resp.status_code not in (200, 204):
+        return {"error": f"Failed to delete event: {resp.status_code}", "detail": resp.text}
+
+    return {"status": "deleted", "id": event_id}

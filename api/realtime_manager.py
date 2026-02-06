@@ -192,8 +192,8 @@ class RealtimeSession:
             tool_instructions += f"""
 
 ## check_calendar
-- Call when the caller asks about availability, appointments, or what's on their schedule.
-- Provide a clear summary of the events found.
+- Call when the caller asks about availability or wants to know when they're free/busy.
+- Returns busy time slots (not event details). Summarize which times are busy vs available.
 
 ## create_calendar_event
 - Call when the caller wants to schedule, book, or create an appointment.
@@ -340,11 +340,11 @@ Sample clarification phrases:
         }
 
     def _get_calendar_check_tool(self) -> Dict[str, Any]:
-        """Return the function tool definition for checking calendar events."""
+        """Return the function tool definition for checking calendar availability."""
         return {
             "type": "function",
             "name": "check_calendar",
-            "description": "Check the business's Google Calendar for events on a given date. Returns a list of events with times, titles, and details.",
+            "description": "Check availability on a given date. Returns busy time slots (start/end times when calendar is occupied).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -740,9 +740,9 @@ Sample clarification phrases:
             }
 
     async def _execute_check_calendar(self, date_str: str) -> Dict[str, Any]:
-        """Check Google Calendar events for a given date."""
+        """Check calendar availability for a given date using freebusy API."""
         try:
-            from api.crud.integrations import list_calendar_events
+            from api.crud.integrations import check_availability
 
             business_id = self.agent_config.get('business_id')
             if not business_id:
@@ -752,8 +752,8 @@ Sample clarification phrases:
             time_min = f"{date_str}T00:00:00Z"
             time_max = f"{date_str}T23:59:59Z"
 
-            result = await list_calendar_events(business_id, time_min, time_max)
-            print(f"[Calendar] check_calendar for {date_str}: {result.get('count', 0)} events")
+            result = await check_availability(business_id, time_min, time_max)
+            print(f"[Calendar] check_calendar for {date_str}: {result.get('count', 0)} busy slots")
             return result
 
         except Exception as e:
@@ -763,7 +763,7 @@ Sample clarification phrases:
     async def _execute_create_calendar_event(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Create a Google Calendar event with settings enforcement."""
         try:
-            from api.crud.integrations import create_calendar_event, list_calendar_events
+            from api.crud.integrations import create_calendar_event, check_availability
             from datetime import datetime, timedelta
 
             business_id = self.agent_config.get('business_id')
@@ -820,11 +820,11 @@ Sample clarification phrases:
             if not allow_conflicts:
                 time_min = f"{date}T{start_time}:00Z"
                 time_max = f"{date}T{end_time}:00Z"
-                existing = await list_calendar_events(business_id, time_min, time_max)
-                if existing.get('events') and len(existing['events']) > 0:
-                    conflicting = existing['events'][0]
+                availability = await check_availability(business_id, time_min, time_max)
+                if availability.get('busy') and len(availability['busy']) > 0:
+                    conflicting = availability['busy'][0]
                     return {
-                        "error": f"There's already an appointment at that time: '{conflicting.get('summary', 'Event')}' from {conflicting.get('start')} to {conflicting.get('end')}. Please choose a different time."
+                        "error": f"There's already an appointment at that time (busy from {conflicting.get('start')} to {conflicting.get('end')}). Please choose a different time."
                     }
 
             start_dt = f"{date}T{start_time}:00"
