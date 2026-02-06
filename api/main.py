@@ -2,10 +2,12 @@
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp, Receive, Send, Scope
 import sys
 import os
+import re
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -19,6 +21,56 @@ from .crud.phone_maintenance import router as phone_maintenance_router
 from .crud.billing import router as billing_router
 from .crud.integrations import router as integrations_router
 from api import __version__
+
+
+class FlyReplayMiddleware:
+    """
+    ASGI middleware for Fly.io session affinity.
+
+    Intercepts WebSocket upgrade requests to media-stream endpoints and checks
+    if the request is on the correct machine. If not, returns an HTTP response
+    with fly-replay header to redirect to the correct instance.
+
+    This enables horizontal scaling by ensuring voice call WebSocket connections
+    stay on the same machine that handled the initial Twilio webhook.
+    """
+
+    # Pattern to match media-stream WebSocket paths with machine ID
+    MEDIA_STREAM_PATTERN = re.compile(r'^/conversation/\d+/media-stream/([a-zA-Z0-9]+)$')
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+        self.current_machine_id = os.getenv("FLY_MACHINE_ID", "local")
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] == "websocket":
+            path = scope.get("path", "")
+            match = self.MEDIA_STREAM_PATTERN.match(path)
+
+            if match:
+                target_machine_id = match.group(1)
+
+                # Check if we need to replay to a different machine
+                if target_machine_id != "local" and target_machine_id != self.current_machine_id:
+                    print(f"[FlyReplay] Replaying WebSocket from {self.current_machine_id} to {target_machine_id}", flush=True)
+
+                    # Send HTTP 307 response with fly-replay header before WebSocket upgrade
+                    await send({
+                        "type": "websocket.http.response.start",
+                        "status": 307,
+                        "headers": [
+                            (b"fly-replay", f"instance={target_machine_id}".encode()),
+                            (b"content-type", b"text/plain"),
+                        ],
+                    })
+                    await send({
+                        "type": "websocket.http.response.body",
+                        "body": b"Replaying to correct instance",
+                    })
+                    return
+
+        # Not a replay case, continue normally
+        await self.app(scope, receive, send)
 
 
 class DocsAccessMiddleware(BaseHTTPMiddleware):
@@ -63,17 +115,17 @@ class DocsAccessMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-app = FastAPI(
+_app = FastAPI(
     title="HelloML API",
     description="API for managing AI voice agents with phone provisioning",
     version=__version__
 )
 
 # Add docs access restriction middleware (before CORS)
-app.add_middleware(DocsAccessMiddleware)
+_app.add_middleware(DocsAccessMiddleware)
 
 # Configure CORS for frontend
-app.add_middleware(
+_app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://helloml.app",          # Production domain
@@ -88,29 +140,34 @@ app.add_middleware(
 )
 
 # Register all routers
-app.include_router(business_router)
-app.include_router(agent_router)
-app.include_router(phone_router)
-app.include_router(conversation_router)
-app.include_router(realtime_router)
-app.include_router(rag_router)
-app.include_router(phone_maintenance_router)
-app.include_router(billing_router)
-app.include_router(integrations_router)
+_app.include_router(business_router)
+_app.include_router(agent_router)
+_app.include_router(phone_router)
+_app.include_router(conversation_router)
+_app.include_router(realtime_router)
+_app.include_router(rag_router)
+_app.include_router(phone_maintenance_router)
+_app.include_router(billing_router)
+_app.include_router(integrations_router)
 
 
-@app.get("/", summary="API status")
+@_app.get("/", summary="API status")
 def index():
     """Returns API status"""
     return {"status": "running", "message": "HelloML API"}
 
 
-@app.get("/version", summary="API version")
+@_app.get("/version", summary="API version")
 def version():
     """Returns API version"""
     return {"version": __version__}
 
 
+# Wrap with Fly.io session affinity middleware for WebSocket routing
+# This must be the outermost middleware to intercept WebSocket upgrades
+app = FlyReplayMiddleware(_app)
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(_app, host="0.0.0.0", port=8000)

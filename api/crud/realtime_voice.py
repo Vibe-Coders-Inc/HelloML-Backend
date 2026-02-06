@@ -3,12 +3,17 @@ Twilio Media Streams WebSocket handler for OpenAI Realtime API integration.
 
 Handles incoming calls from Twilio and bridges audio between Twilio Media Streams
 and OpenAI Realtime API.
+
+Supports horizontal scaling via Fly.io session affinity - the WebSocket URL
+includes the machine ID so calls are routed to the same instance that
+handled the initial webhook.
 """
 
+import os
 import json
 import asyncio
 from datetime import datetime
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.responses import Response
 from api.database import get_service_client
 from api.realtime_manager import RealtimeSession
@@ -90,9 +95,12 @@ async def handle_incoming_call(agent_id: int, request: Request):
         # Build TwiML response with Media Stream
         # The WebSocket URL is where Twilio will connect for bidirectional audio
         # Note: Query parameters are stripped by Twilio, use <Parameter> tags instead
-        ws_url = f"wss://{request.url.hostname}/conversation/{agent_id}/media-stream"
+        # Include Fly.io machine ID for session affinity (horizontal scaling)
+        machine_id = os.getenv("FLY_MACHINE_ID", "local")
+        ws_url = f"wss://{request.url.hostname}/conversation/{agent_id}/media-stream/{machine_id}"
 
         print(f"[TwilioWebhook] Incoming call for agent {agent_id}, conversation {conversation_id}", flush=True)
+        print(f"[TwilioWebhook] Machine ID: {machine_id}", flush=True)
         print(f"[TwilioWebhook] Generated WebSocket URL: {ws_url}", flush=True)
 
         twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
@@ -115,15 +123,19 @@ async def handle_incoming_call(agent_id: int, request: Request):
         )
 
 
-@router.websocket('/{agent_id}/media-stream')
-async def media_stream_handler(websocket: WebSocket, agent_id: int):
+@router.websocket('/{agent_id}/media-stream/{target_machine_id}')
+async def media_stream_handler(websocket: WebSocket, agent_id: int, target_machine_id: str):
     """
     Handle bidirectional audio streaming between Twilio and OpenAI Realtime API.
 
     Twilio sends/receives: μ-law 8kHz (base64)
     OpenAI sends/receives: PCM16 24kHz (base64)
+
+    The target_machine_id parameter enables Fly.io session affinity for horizontal scaling.
+    The FlyReplayMiddleware intercepts requests to wrong machines before they reach here.
     """
-    print(f"[MediaStream] WebSocket connection attempt for agent {agent_id}", flush=True)
+    current_machine_id = os.getenv("FLY_MACHINE_ID", "local")
+    print(f"[MediaStream] WebSocket connection for agent {agent_id} on machine {current_machine_id}", flush=True)
 
     try:
         await websocket.accept()
