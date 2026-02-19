@@ -20,6 +20,7 @@ from .crud.rag_endpoints import router as rag_router
 from .crud.phone_maintenance import router as phone_maintenance_router
 from .crud.billing import router as billing_router
 from .crud.integrations import router as integrations_router
+from .crud.demo import router as demo_router
 from api import __version__
 
 
@@ -149,6 +150,7 @@ _app.include_router(rag_router)
 _app.include_router(phone_maintenance_router)
 _app.include_router(billing_router)
 _app.include_router(integrations_router)
+_app.include_router(demo_router)
 
 
 @_app.get("/", summary="API status")
