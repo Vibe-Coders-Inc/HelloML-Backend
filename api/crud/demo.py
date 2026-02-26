@@ -112,23 +112,35 @@ async def create_demo_session(request: Request, body: Optional[DemoSessionReques
     if not openai_key:
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
-    # Request ephemeral token from OpenAI
+    # Request ephemeral token from OpenAI (new client_secrets endpoint)
+    # Docs: https://developers.openai.com/api/docs/guides/realtime-webrtc
+    session_config = {
+        "session": {
+            "type": "realtime",
+            "model": DEMO_MODEL,
+            "instructions": DEMO_INSTRUCTIONS,
+            "audio": {
+                "input": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "transcription": {"model": "gpt-4o-mini-transcribe"},
+                    "turn_detection": {"type": "semantic_vad"},
+                },
+                "output": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "voice": voice,
+                },
+            },
+        }
+    }
+
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
-            "https://api.openai.com/v1/realtime/sessions",
+            "https://api.openai.com/v1/realtime/client_secrets",
             headers={
                 "Authorization": f"Bearer {openai_key}",
                 "Content-Type": "application/json",
             },
-            json={
-                "model": DEMO_MODEL,
-                "voice": voice,
-                "instructions": DEMO_INSTRUCTIONS,
-                "turn_detection": {"type": "semantic_vad"},
-                "input_audio_transcription": {"model": "gpt-4o-mini-transcribe"},
-                "input_audio_format": "pcm16",
-                "output_audio_format": "pcm16",
-            },
+            json=session_config,
         )
 
     if resp.status_code != 200:
@@ -138,12 +150,7 @@ async def create_demo_session(request: Request, body: Optional[DemoSessionReques
     data = resp.json()
 
     return {
-        "ephemeral_key": data.get("client_secret", {}).get("value"),
+        "ephemeral_key": data.get("value", data.get("client_secret", {}).get("value")),
         "model": DEMO_MODEL,
-        "session_config": {
-            "instructions": DEMO_INSTRUCTIONS,
-            "voice": voice,
-            "model": DEMO_MODEL,
-            "tools": [],
-        },
+        "voice": voice,
     }
