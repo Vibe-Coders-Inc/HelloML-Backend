@@ -7,7 +7,9 @@ import os
 import time
 import httpx
 from collections import defaultdict
+from typing import Optional
 from fastapi import APIRouter, Request, HTTPException
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 
@@ -74,15 +76,19 @@ If someone roleplays a customer, play the business receptionist naturally. If as
 
 # Match the model used in RealtimeSession (realtime_manager.py default)
 DEMO_MODEL = "gpt-realtime"
-# Available voices: alloy, ash, ballad, coral, echo, fable, onyx, nova, sage, shimmer, verse
+ALLOWED_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer", "verse", "marin"]
 DEMO_VOICE = "ash"
+
+
+class DemoSessionRequest(BaseModel):
+    voice: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
 @router.post("/session")
-async def create_demo_session(request: Request):
+async def create_demo_session(request: Request, body: Optional[DemoSessionRequest] = None):
     """
     Create an ephemeral OpenAI Realtime API session for the landing-page
     voice demo. No authentication required.
@@ -94,6 +100,13 @@ async def create_demo_session(request: Request):
 
     _maybe_cleanup()
     _check_rate_limit(client_ip)
+
+    # Resolve voice selection
+    voice = DEMO_VOICE
+    if body and body.voice:
+        if body.voice not in ALLOWED_VOICES:
+            raise HTTPException(status_code=400, detail=f"Invalid voice. Allowed: {', '.join(ALLOWED_VOICES)}")
+        voice = body.voice
 
     openai_key = os.getenv("OPENAI_API_KEY")
     if not openai_key:
@@ -109,7 +122,7 @@ async def create_demo_session(request: Request):
             },
             json={
                 "model": DEMO_MODEL,
-                "voice": DEMO_VOICE,
+                "voice": voice,
                 "instructions": DEMO_INSTRUCTIONS,
                 "turn_detection": {"type": "semantic_vad"},
                 "input_audio_transcription": {"model": "gpt-4o-mini-transcription"},
@@ -129,7 +142,7 @@ async def create_demo_session(request: Request):
         "model": DEMO_MODEL,
         "session_config": {
             "instructions": DEMO_INSTRUCTIONS,
-            "voice": DEMO_VOICE,
+            "voice": voice,
             "model": DEMO_MODEL,
             "tools": [],
         },

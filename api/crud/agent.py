@@ -20,6 +20,7 @@ class AgentCreate(BaseModel):
     prompt: Optional[str] = None
     greeting: Optional[str] = "Hello There!"
     goodbye: Optional[str] = "Goodbye and take care!"
+    voice_model: Optional[str] = "ash"
 
 
 class AgentUpdate(BaseModel):
@@ -30,6 +31,7 @@ class AgentUpdate(BaseModel):
     greeting: Optional[str] = None
     goodbye: Optional[str] = None
     status: Optional[str] = None
+    voice_model: Optional[str] = None
 
 
 async def provision_phone_for_agent(agent_id: int, area_code: str):
@@ -102,6 +104,7 @@ async def create_agent(
             'prompt': agent.prompt,
             'greeting': agent.greeting,
             'goodbye': agent.goodbye,
+            'voice_model': agent.voice_model,
             'status': 'active'
         }).execute()
 
