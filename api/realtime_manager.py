@@ -268,6 +268,7 @@ Sample clarification phrases:
                 "tools": tools,
                 "tool_choice": "auto",
                 "output_modalities": ["audio"],
+                "voice": self.agent_config.get('voice_model', 'ash'),
                 "audio": {
                     "input": {
                         "format": {
