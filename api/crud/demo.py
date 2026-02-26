@@ -125,7 +125,7 @@ async def create_demo_session(request: Request, body: Optional[DemoSessionReques
                 "voice": voice,
                 "instructions": DEMO_INSTRUCTIONS,
                 "turn_detection": {"type": "semantic_vad"},
-                "input_audio_transcription": {"model": "gpt-4o-mini-transcription"},
+                "input_audio_transcription": {"model": "gpt-4o-mini-transcribe"},
                 "input_audio_format": "pcm16",
                 "output_audio_format": "pcm16",
             },
