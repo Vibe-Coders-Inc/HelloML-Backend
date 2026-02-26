@@ -76,7 +76,9 @@ If someone roleplays a customer, play the business receptionist naturally. If as
 
 # Match the model used in RealtimeSession (realtime_manager.py default)
 DEMO_MODEL = "gpt-realtime-1.5"
-ALLOWED_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer", "verse", "marin"]
+# Verified working with gpt-realtime-1.5 + client_secrets endpoint (tested 2026-02-26)
+# fable, onyx, nova are TTS-only — they fail on the Realtime API
+ALLOWED_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin"]
 DEMO_VOICE = "ash"
 
 
