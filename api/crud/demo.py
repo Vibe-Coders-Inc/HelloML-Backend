@@ -75,7 +75,7 @@ If someone roleplays a customer, play the business receptionist naturally. If as
 """
 
 # Match the model used in RealtimeSession (realtime_manager.py default)
-DEMO_MODEL = "gpt-realtime"
+DEMO_MODEL = "gpt-realtime-1.5"
 ALLOWED_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer", "verse", "marin"]
 DEMO_VOICE = "ash"
 

@@ -100,7 +100,7 @@ class RealtimeSession:
     async def connect(self):
         """Connect to OpenAI Realtime API and configure session."""
         # Get model from agent config, use latest GA model as default
-        model = self.agent_config.get('model_type') or 'gpt-realtime-2025-08-28'
+        model = self.agent_config.get('model_type') or 'gpt-realtime-1.5'
 
         url = f"wss://api.openai.com/v1/realtime?model={model}"
 
