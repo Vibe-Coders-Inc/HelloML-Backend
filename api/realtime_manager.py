@@ -106,7 +106,9 @@ class RealtimeSession:
     async def connect(self):
         """Connect to OpenAI Realtime API and configure session."""
         # Get model from agent config, use latest GA model as default
-        model = self.agent_config.get('model_type') or 'gpt-realtime-1.5'
+        # Use gpt-realtime for phone calls (supports audio/pcmu natively).
+        # gpt-realtime-1.5 may not support audio/pcmu format properly.
+        model = 'gpt-realtime'
 
         url = f"wss://api.openai.com/v1/realtime?model={model}"
 
@@ -274,34 +276,19 @@ Sample clarification phrases:
                 "tools": tools,
                 "tool_choice": "auto",
                 "output_modalities": ["audio"],
-                "voice": self.agent_config.get('voice_model', 'ash'),
-                # Use audio/pcmu (μ-law) format — this is what Twilio Media Streams
-                # natively sends/receives. No resampling or PCM conversion needed.
-                # This matches the official Twilio + OpenAI integration sample:
+                # Use audio/pcmu (μ-law) format — matches official Twilio + OpenAI sample:
                 # https://github.com/twilio-samples/speech-assistant-openai-realtime-api-python
                 "audio": {
                     "input": {
-                        "format": {
-                            "type": "audio/pcmu"
-                        },
+                        "format": {"type": "audio/pcmu"},
                         "transcription": {
                             "model": "gpt-4o-mini-transcribe"
                         },
-                        "noise_reduction": {
-                            "type": "near_field"
-                        },
-                        "turn_detection": {
-                            # server_vad is more robust for phone audio than semantic_vad.
-                            # semantic_vad can phantom-trigger on background noise / silence.
-                            "type": "server_vad",
-                            "silence_duration_ms": 500,
-                            "threshold": 0.6
-                        }
+                        "turn_detection": {"type": "server_vad"}
                     },
                     "output": {
-                        "format": {
-                            "type": "audio/pcmu"
-                        }
+                        "format": {"type": "audio/pcmu"},
+                        "voice": self.agent_config.get('voice_model', 'ash')
                     }
                 }
             }
