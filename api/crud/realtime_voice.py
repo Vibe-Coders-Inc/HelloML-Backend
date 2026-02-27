@@ -17,7 +17,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, HTTPExce
 from fastapi.responses import Response
 from api.database import get_service_client
 from api.realtime_manager import RealtimeSession
-from api.audio_utils import twilio_to_openai, openai_to_twilio
+# audio_utils no longer needed — pcmu passthrough means zero conversion
 
 FREE_TRIAL_MINUTES = 5
 
@@ -210,8 +210,12 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int, target_machi
     db = None
     realtime_session: RealtimeSession = None
 
-    # Audio buffering for Twilio
-    twilio_audio_queue = asyncio.Queue()
+    # Audio output buffering for smooth Twilio playback.
+    # Accumulate small OpenAI chunks and flush at regular intervals
+    # to prevent micro-gaps between chunks that cause choppiness.
+    audio_output_buffer = []
+    audio_flush_task = None
+    AUDIO_FLUSH_INTERVAL_MS = 50  # Flush every 50ms for smooth playback
 
     try:
         print(f"[MediaStream] Getting database connection", flush=True)
@@ -266,31 +270,59 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int, target_machi
             except Exception as e:
                 print(f"[MediaStream] Warning: Could not fetch tool connections: {e}", flush=True)
 
-        # Callback to send audio to Twilio
-        async def send_audio_to_twilio(openai_audio_base64: str):
-            """Pass OpenAI audio/pcmu directly to Twilio — no conversion needed."""
-            try:
-                if not stream_sid:
-                    print("[MediaStream] Warning: stream_sid not set, skipping audio send")
-                    return
+        # Callback to send audio to Twilio with buffering for smooth playback
+        async def flush_audio_buffer():
+            """Flush accumulated audio chunks to Twilio as a single payload."""
+            nonlocal audio_output_buffer
+            if not audio_output_buffer or not stream_sid:
+                return
+            # Concatenate all buffered base64 chunks into one
+            import base64
+            combined_bytes = b""
+            for chunk_b64 in audio_output_buffer:
+                combined_bytes += base64.b64decode(chunk_b64)
+            audio_output_buffer = []
 
-                # With audio/pcmu format, OpenAI outputs μ-law audio that Twilio
-                # can play directly. No resampling or format conversion required.
-                media_event = {
-                    "event": "media",
-                    "streamSid": stream_sid,
-                    "media": {
-                        "payload": openai_audio_base64
-                    }
+            combined_b64 = base64.b64encode(combined_bytes).decode('utf-8')
+            media_event = {
+                "event": "media",
+                "streamSid": stream_sid,
+                "media": {
+                    "payload": combined_b64
                 }
+            }
+            try:
                 await websocket.send_json(media_event)
             except Exception as e:
-                print(f"[MediaStream] Error sending audio to Twilio: {e}")
+                print(f"[MediaStream] Error flushing audio to Twilio: {e}")
+
+        async def audio_flush_loop():
+            """Periodically flush audio buffer to Twilio for smooth playback."""
+            try:
+                while True:
+                    await asyncio.sleep(AUDIO_FLUSH_INTERVAL_MS / 1000.0)
+                    await flush_audio_buffer()
+            except asyncio.CancelledError:
+                # Final flush on cancel
+                await flush_audio_buffer()
+
+        async def send_audio_to_twilio(openai_audio_base64: str):
+            """Buffer OpenAI audio/pcmu chunks for smooth Twilio delivery."""
+            nonlocal audio_flush_task
+            if not stream_sid:
+                return
+            audio_output_buffer.append(openai_audio_base64)
+            # Start flush loop on first audio chunk
+            if audio_flush_task is None:
+                audio_flush_task = asyncio.create_task(audio_flush_loop())
 
         # Callback to clear Twilio audio buffer on user interruption
         async def handle_interrupt():
             """Send clear event to Twilio to stop queued audio immediately."""
+            nonlocal audio_output_buffer
             try:
+                # Clear our local buffer first
+                audio_output_buffer = []
                 if stream_sid:
                     await websocket.send_json({
                         "event": "clear",
@@ -404,6 +436,13 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int, target_machi
         print(f"[MediaStream] Traceback: {traceback.format_exc()}", flush=True)
     finally:
         print(f"[MediaStream] Entering cleanup for conversation {conversation_id}", flush=True)
+        # Cancel audio flush loop
+        if audio_flush_task:
+            audio_flush_task.cancel()
+            try:
+                await audio_flush_task
+            except asyncio.CancelledError:
+                pass
         # Clean up
         if realtime_session:
             await realtime_session.disconnect()

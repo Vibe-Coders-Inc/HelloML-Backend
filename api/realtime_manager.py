@@ -106,9 +106,9 @@ class RealtimeSession:
     async def connect(self):
         """Connect to OpenAI Realtime API and configure session."""
         # Get model from agent config, use latest GA model as default
-        # Use gpt-realtime for phone calls (supports audio/pcmu natively).
-        # gpt-realtime-1.5 may not support audio/pcmu format properly.
-        model = 'gpt-realtime'
+        # Use gpt-realtime-1.5 (flagship model, best voice quality).
+        # audio/pcmu format confirmed working with GA Realtime API.
+        model = self.agent_config.get('model_type') or 'gpt-realtime-1.5'
 
         url = f"wss://api.openai.com/v1/realtime?model={model}"
 
@@ -294,7 +294,7 @@ Sample clarification phrases:
                     },
                     "output": {
                         "format": {"type": "audio/pcmu"},
-                        "voice": self.agent_config.get('voice_model', 'ash')
+                        "voice": self.agent_config.get('voice_model', 'marin')
                     }
                 }
             }
