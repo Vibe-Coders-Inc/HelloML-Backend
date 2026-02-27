@@ -7,6 +7,7 @@ webhook events, call acceptance, and function calls via WebSocket monitoring.
 """
 
 import os
+import re
 import json
 import asyncio
 import threading
@@ -45,7 +46,6 @@ def _lookup_agent_by_phone(db, to_header: str):
     Look up agent by the called phone number from SIP To header.
     To header format: sip:+18005551212@sip.example.com
     """
-    import re
     # Extract phone number from SIP URI
     match = re.search(r'sip:(\+?\d+)@', to_header)
     if not match:
@@ -61,13 +61,21 @@ def _lookup_agent_by_phone(db, to_header: str):
     ).limit(1).execute()
 
     if not phone_data.data:
-        # Try with/without +1 prefix
-        alt_number = called_number if called_number.startswith('+') else f'+{called_number}'
-        if not alt_number.startswith('+1') and len(alt_number) == 11:
-            alt_number = f'+{alt_number}'
-        phone_data = db.table('phone_number').select('agent_id, phone_number').eq(
-            'phone_number', alt_number
-        ).limit(1).execute()
+        # Build alternative number formats to try
+        alternatives = set()
+        raw = called_number.lstrip('+')
+        alternatives.add(f'+{raw}')       # +18005551212
+        alternatives.add(raw)             # 18005551212
+        if raw.startswith('1') and len(raw) == 11:
+            alternatives.add(raw[1:])         # 8005551212
+            alternatives.add(f'+{raw[1:]}')   # +8005551212
+        alternatives.discard(called_number)  # already tried
+        for alt_number in alternatives:
+            phone_data = db.table('phone_number').select('agent_id, phone_number').eq(
+                'phone_number', alt_number
+            ).limit(1).execute()
+            if phone_data.data:
+                break
 
     if not phone_data.data:
         print(f"[SIP] No agent found for phone: {called_number}", flush=True)
@@ -324,8 +332,25 @@ async def _websocket_monitor(call_id, agent_config, conversation_id, agent_phone
             await ws.send(json.dumps({"type": "response.create"}))
 
             current_agent_transcript = ""
+            session_start = asyncio.get_event_loop().time()
+            MAX_SESSION_DURATION = 3600  # 1 hour
 
             async for message in ws:
+                # Check max session duration
+                elapsed = asyncio.get_event_loop().time() - session_start
+                if elapsed >= MAX_SESSION_DURATION:
+                    print(f"[SIP-WS] Max session duration reached ({MAX_SESSION_DURATION}s), closing call {call_id}", flush=True)
+                    try:
+                        await asyncio.to_thread(
+                            http_requests.post,
+                            f"https://api.openai.com/v1/realtime/calls/{call_id}/hangup",
+                            headers=_get_auth_header()
+                        )
+                    except Exception:
+                        pass
+                    await ws.close()
+                    break
+
                 event = json.loads(message)
                 event_type = event.get("type")
 
@@ -432,7 +457,8 @@ async def _handle_function_call(ws, item, agent_id, conversation_id, business_id
             await asyncio.sleep(4.0)
             # Hang up via API
             try:
-                http_requests.post(
+                await asyncio.to_thread(
+                    http_requests.post,
                     f"https://api.openai.com/v1/realtime/calls/{call_id}/hangup",
                     headers=_get_auth_header()
                 )
@@ -545,10 +571,12 @@ async def sip_webhook(request: Request):
 
     if not agent_config:
         print(f"[SIP] No agent found, rejecting call", flush=True)
-        http_requests.post(
-            f"https://api.openai.com/v1/realtime/calls/{call_id}/reject",
-            headers={**_get_auth_header(), "Content-Type": "application/json"},
-            json={"status_code": 404}
+        await asyncio.to_thread(
+            lambda: http_requests.post(
+                f"https://api.openai.com/v1/realtime/calls/{call_id}/reject",
+                headers={**_get_auth_header(), "Content-Type": "application/json"},
+                json={"status_code": 404}
+            )
         )
         return JSONResponse({"status": "rejected", "reason": "no agent"})
 
@@ -556,10 +584,12 @@ async def sip_webhook(request: Request):
 
     # Check trial
     if _check_trial_exhausted(db, agent_config):
-        http_requests.post(
-            f"https://api.openai.com/v1/realtime/calls/{call_id}/reject",
-            headers={**_get_auth_header(), "Content-Type": "application/json"},
-            json={"status_code": 486}
+        await asyncio.to_thread(
+            lambda: http_requests.post(
+                f"https://api.openai.com/v1/realtime/calls/{call_id}/reject",
+                headers={**_get_auth_header(), "Content-Type": "application/json"},
+                json={"status_code": 486}
+            )
         )
         return JSONResponse({"status": "rejected", "reason": "trial exhausted"})
 
@@ -586,14 +616,20 @@ async def sip_webhook(request: Request):
         except Exception:
             pass
 
+    # Idempotency check — skip if this call_id already has a conversation
+    existing = db.table('conversation').select('id').eq('call_id', call_id).limit(1).execute()
+    if existing.data:
+        print(f"[SIP] Duplicate webhook for call {call_id}, skipping", flush=True)
+        return JSONResponse({"status": "already_handled", "call_id": call_id})
+
     # Extract caller phone from SIP From header
-    import re
     caller_match = re.search(r'sip:(\+?\d+)@', from_header)
     caller_phone = caller_match.group(1) if caller_match else 'unknown'
 
     # Create conversation
     conversation = db.table('conversation').insert({
         'agent_id': agent_id,
+        'call_id': call_id,
         'caller_phone': caller_phone,
         'status': 'in_progress'
     }).execute()
@@ -604,10 +640,12 @@ async def sip_webhook(request: Request):
     session_config = _build_session_config(agent_config, business_info, agent_phone, connected_tools, tool_settings)
 
     try:
-        accept_resp = http_requests.post(
-            f"https://api.openai.com/v1/realtime/calls/{call_id}/accept",
-            headers={**_get_auth_header(), "Content-Type": "application/json"},
-            json=session_config
+        accept_resp = await asyncio.to_thread(
+            lambda: http_requests.post(
+                f"https://api.openai.com/v1/realtime/calls/{call_id}/accept",
+                headers={**_get_auth_header(), "Content-Type": "application/json"},
+                json=session_config
+            )
         )
         accept_resp.raise_for_status()
         print(f"[SIP] Call {call_id} accepted (HTTP {accept_resp.status_code})", flush=True)
