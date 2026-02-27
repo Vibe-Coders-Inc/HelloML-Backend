@@ -294,7 +294,7 @@ Sample clarification phrases:
                     },
                     "output": {
                         "format": {"type": "audio/pcmu"},
-                        "voice": self.agent_config.get('voice_model', 'marin')
+                        "voice": self.agent_config.get('voice_model', 'ash')
                     }
                 }
             }
