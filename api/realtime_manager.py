@@ -276,7 +276,7 @@ Sample clarification phrases:
                             "rate": 24000
                         },
                         "transcription": {
-                            "model": "whisper-1"
+                            "model": "gpt-4o-mini-transcribe"
                         },
                         "noise_reduction": {
                             "type": "near_field"
