@@ -268,17 +268,15 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int, target_machi
 
         # Callback to send audio to Twilio
         async def send_audio_to_twilio(openai_audio_base64: str):
-            """Convert OpenAI audio to Twilio format and send. Uses passthrough for g711_ulaw."""
+            """Convert OpenAI PCM audio to Twilio μ-law and send."""
             try:
                 if not stream_sid:
                     print("[MediaStream] Warning: stream_sid not set, skipping audio send")
                     return
 
-                # Use passthrough if g711_ulaw (no conversion needed), else resample
-                if realtime_session and realtime_session.audio_format == "g711_ulaw":
-                    twilio_audio = openai_to_twilio_passthrough(openai_audio_base64)
-                else:
-                    twilio_audio = openai_to_twilio(openai_audio_base64, source_rate=24000)
+                # Determine source rate based on session audio format
+                source_rate = 8000 if (realtime_session and realtime_session.audio_format == "pcm_8k") else 24000
+                twilio_audio = openai_to_twilio(openai_audio_base64, source_rate=source_rate)
 
                 media_event = {
                     "event": "media",
@@ -381,11 +379,9 @@ async def media_stream_handler(websocket: WebSocket, agent_id: int, target_machi
                         realtime_session.update_media_timestamp(timestamp)
 
                     if twilio_audio_base64 and realtime_session:
-                        # Use passthrough if g711_ulaw, else resample
-                        if realtime_session.audio_format == "g711_ulaw":
-                            openai_audio = twilio_to_openai_passthrough(twilio_audio_base64)
-                        else:
-                            openai_audio = twilio_to_openai(twilio_audio_base64, target_rate=24000)
+                        # Determine target rate based on session audio format
+                        target_rate = 8000 if realtime_session.audio_format == "pcm_8k" else 24000
+                        openai_audio = twilio_to_openai(twilio_audio_base64, target_rate=target_rate)
                         await realtime_session.send_audio(openai_audio)
 
                 # Mark packets as received - pop from session mark queue

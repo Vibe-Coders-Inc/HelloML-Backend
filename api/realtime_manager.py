@@ -276,7 +276,7 @@ Sample clarification phrases:
                     "input": {
                         "format": {
                             "type": "audio/pcm",
-                            "rate": 24000
+                            "rate": 8000
                         },
                         "transcription": {
                             "model": "gpt-4o-mini-transcribe"
@@ -294,14 +294,14 @@ Sample clarification phrases:
                     "output": {
                         "format": {
                             "type": "audio/pcm",
-                            "rate": 24000
+                            "rate": 8000
                         }
                     }
                 }
             }
         }
 
-        self.audio_format = "pcm_24k"
+        self.audio_format = "pcm_8k"
 
         await self.send_event(session_config)
         print(f"[RealtimeSession] Session configured - tools: {tool_names}, phone: {self.agent_phone}")
