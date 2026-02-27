@@ -80,8 +80,8 @@ class RealtimeSession:
         self.current_user_transcript = ""
         self.current_agent_transcript = ""
 
-        # Audio format: "g711_ulaw" (passthrough) or "pcm_24k" (with resampling)
-        self.audio_format = "g711_ulaw"
+        # Audio format: always PCM 24kHz (g711_ulaw not supported by GA API)
+        self.audio_format = "pcm_24k"
 
         # Track function call state
         self.pending_function_calls: Dict[str, Dict] = {}
@@ -263,13 +263,6 @@ Sample clarification phrases:
 
 {base_instructions}"""
 
-        # Use g711_ulaw so Twilio's native μ-law 8kHz audio passes straight
-        # through without any resampling.  Falls back to PCM 24kHz if the API
-        # rejects the format (handled in _handle_event on session.updated error).
-        audio_format = {
-            "type": "audio/g711-ulaw",
-        }
-
         session_config = {
             "type": "session.update",
             "session": {
@@ -281,7 +274,10 @@ Sample clarification phrases:
                 "voice": self.agent_config.get('voice_model', 'ash'),
                 "audio": {
                     "input": {
-                        "format": audio_format,
+                        "format": {
+                            "type": "audio/pcm",
+                            "rate": 24000
+                        },
                         "transcription": {
                             "model": "gpt-4o-mini-transcribe"
                         },
@@ -296,50 +292,21 @@ Sample clarification phrases:
                         }
                     },
                     "output": {
-                        "format": audio_format
+                        "format": {
+                            "type": "audio/pcm",
+                            "rate": 24000
+                        }
                     }
                 }
             }
         }
 
-        # Track which audio format we're using so the Twilio handler knows
-        # whether to convert or pass through.
-        self.audio_format = "g711_ulaw"
+        self.audio_format = "pcm_24k"
 
         await self.send_event(session_config)
         print(f"[RealtimeSession] Session configured - tools: {tool_names}, phone: {self.agent_phone}")
 
         # Trigger the initial greeting
-        await self._trigger_initial_greeting()
-
-    async def _configure_session_pcm_fallback(self):
-        """Re-send session.update with PCM 24kHz format (fallback if g711 rejected)."""
-        print("[RealtimeSession] Retrying session config with PCM 24kHz")
-        pcm_format = {"type": "audio/pcm", "rate": 24000}
-        fallback_config = {
-            "type": "session.update",
-            "session": {
-                "type": "realtime",
-                "audio": {
-                    "input": {
-                        "format": pcm_format,
-                        "transcription": {"model": "gpt-4o-mini-transcribe"},
-                        "noise_reduction": {"type": "near_field"},
-                        "turn_detection": {
-                            "type": "semantic_vad",
-                            "eagerness": "medium",
-                            "create_response": True,
-                            "interrupt_response": True
-                        }
-                    },
-                    "output": {
-                        "format": pcm_format
-                    }
-                }
-            }
-        }
-        await self.send_event(fallback_config)
-        # Re-trigger greeting since the first attempt may have failed
         await self._trigger_initial_greeting()
 
     def _get_rag_tool_definition(self) -> Dict[str, Any]:
@@ -602,12 +569,7 @@ Sample clarification phrases:
                 print(f"[RealtimeSession] Truncation overshoot (harmless): {error_msg}")
                 return
 
-            # If g711_ulaw format was rejected, fall back to PCM 24kHz
-            if ("format" in error_msg.lower() or "g711" in error_msg.lower() or "audio" in error_msg.lower()) and getattr(self, 'audio_format', '') == 'g711_ulaw':
-                print(f"[RealtimeSession] g711_ulaw not supported, falling back to PCM 24kHz")
-                self.audio_format = "pcm_24k"
-                await self._configure_session_pcm_fallback()
-                return
+            # (g711_ulaw fallback removed — GA API only supports audio/pcm)
 
             print(f"[RealtimeSession] ERROR [{error_code}]: {error_msg}")
             print(f"[RealtimeSession] Full error: {error_obj}")
