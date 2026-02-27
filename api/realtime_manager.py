@@ -284,7 +284,13 @@ Sample clarification phrases:
                         "transcription": {
                             "model": "gpt-4o-mini-transcribe"
                         },
-                        "turn_detection": {"type": "server_vad"}
+                        "noise_reduction": {
+                            "type": "near_field"
+                        },
+                        "turn_detection": {
+                            "type": "semantic_vad",
+                            "eagerness": "low"
+                        }
                     },
                     "output": {
                         "format": {"type": "audio/pcmu"},
