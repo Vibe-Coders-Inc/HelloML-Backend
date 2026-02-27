@@ -80,8 +80,11 @@ class RealtimeSession:
         self.current_user_transcript = ""
         self.current_agent_transcript = ""
 
-        # Audio format: always PCM 24kHz (g711_ulaw not supported by GA API)
-        self.audio_format = "pcm_24k"
+        # Audio format: audio/pcmu (μ-law) for Twilio — zero conversion needed.
+        # The OpenAI Realtime API natively supports audio/pcmu format,
+        # so we pass Twilio's μ-law 8kHz audio straight through without
+        # any resampling or PCM conversion. This eliminates quality loss.
+        self.audio_format = "pcmu"
 
         # Track function call state
         self.pending_function_calls: Dict[str, Dict] = {}
@@ -272,11 +275,14 @@ Sample clarification phrases:
                 "tool_choice": "auto",
                 "output_modalities": ["audio"],
                 "voice": self.agent_config.get('voice_model', 'ash'),
+                # Use audio/pcmu (μ-law) format — this is what Twilio Media Streams
+                # natively sends/receives. No resampling or PCM conversion needed.
+                # This matches the official Twilio + OpenAI integration sample:
+                # https://github.com/twilio-samples/speech-assistant-openai-realtime-api-python
                 "audio": {
                     "input": {
                         "format": {
-                            "type": "audio/pcm",
-                            "rate": 8000
+                            "type": "audio/pcmu"
                         },
                         "transcription": {
                             "model": "gpt-4o-mini-transcribe"
@@ -285,23 +291,21 @@ Sample clarification phrases:
                             "type": "near_field"
                         },
                         "turn_detection": {
-                            "type": "semantic_vad",
-                            "eagerness": "medium",
-                            "create_response": True,
-                            "interrupt_response": True
+                            # server_vad is more robust for phone audio than semantic_vad.
+                            # semantic_vad can phantom-trigger on background noise / silence.
+                            "type": "server_vad",
+                            "silence_duration_ms": 500,
+                            "threshold": 0.6
                         }
                     },
                     "output": {
                         "format": {
-                            "type": "audio/pcm",
-                            "rate": 8000
+                            "type": "audio/pcmu"
                         }
                     }
                 }
             }
         }
-
-        self.audio_format = "pcm_8k"
 
         await self.send_event(session_config)
         print(f"[RealtimeSession] Session configured - tools: {tool_names}, phone: {self.agent_phone}")
