@@ -260,6 +260,11 @@ You can ONLY perform actions that your tools allow.
 Professional, friendly, calm, and approachable. Warm, concise, confident, never fawning. 2-3 sentences per turn.
 English only. Vary your responses.
 
+# Turn-Taking
+- NEVER interrupt the caller mid-sentence.
+- Wait for a clear pause before responding.
+- If you hear background noise, ignore it — only respond to clear speech directed at you.
+
 # Initial Greeting
 When you see "[Call connected]", say exactly: "{greeting}"
 - Say this once, then wait for the caller.
@@ -298,7 +303,7 @@ When you see "[Call connected]", say exactly: "{greeting}"
                     "model": "gpt-4o-mini-transcribe"
                 },
                 "noise_reduction": {
-                    "type": "near_field"
+                    "type": "far_field"
                 },
                 "turn_detection": {
                     "type": "semantic_vad",
