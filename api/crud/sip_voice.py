@@ -281,6 +281,8 @@ When you see "[Call connected]", say exactly: "{greeting}"
     voice = agent_config.get('voice_model', 'ash')
     model = agent_config.get('model_type') or 'gpt-realtime-1.5'
 
+    # Accept call API uses nested audio config structure
+    # See: https://developers.openai.com/api/reference/resources/realtime/subresources/calls/methods/accept
     return {
         "type": "realtime",
         "model": model,
@@ -288,11 +290,19 @@ When you see "[Call connected]", say exactly: "{greeting}"
         "tools": tools,
         "tool_choice": "auto",
         "voice": voice,
-        "input_audio_transcription": {
-            "model": "gpt-4o-mini-transcribe"
-        },
-        "input_audio_noise_reduction": {
-            "type": "near_field"
+        "audio": {
+            "input": {
+                "format": {"type": "audio/pcmu"},
+                "transcription": {
+                    "model": "gpt-4o-mini-transcribe"
+                },
+                "noise_reduction": {
+                    "type": "near_field"
+                }
+            },
+            "output": {
+                "format": {"type": "audio/pcmu"}
+            }
         },
         "turn_detection": {
             "type": "semantic_vad",
