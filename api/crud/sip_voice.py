@@ -298,15 +298,15 @@ When you see "[Call connected]", say exactly: "{greeting}"
                 },
                 "noise_reduction": {
                     "type": "near_field"
+                },
+                "turn_detection": {
+                    "type": "semantic_vad",
+                    "eagerness": "low"
                 }
             },
             "output": {
                 "format": {"type": "audio/pcmu"}
             }
-        },
-        "turn_detection": {
-            "type": "semantic_vad",
-            "eagerness": "low"
         }
     }
 
