@@ -654,20 +654,15 @@ async def sip_webhook(request: Request):
         except Exception:
             pass
 
-    # Idempotency check — skip if this call_id already has a conversation
-    existing = db.table('conversation').select('id').eq('call_id', call_id).limit(1).execute()
-    if existing.data:
-        print(f"[SIP] Duplicate webhook for call {call_id}, skipping", flush=True)
-        return JSONResponse({"status": "already_handled", "call_id": call_id})
+    # Note: idempotency check removed — conversation table has no call_id column
 
     # Extract caller phone from SIP From header
     caller_match = re.search(r'sip:(\+?\d+)@', from_header)
     caller_phone = caller_match.group(1) if caller_match else 'unknown'
 
-    # Create conversation
+    # Create conversation (matches realtime_voice.py schema — no call_id column)
     conversation = db.table('conversation').insert({
         'agent_id': agent_id,
-        'call_id': call_id,
         'caller_phone': caller_phone,
         'status': 'in_progress'
     }).execute()
