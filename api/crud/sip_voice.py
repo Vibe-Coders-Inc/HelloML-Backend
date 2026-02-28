@@ -563,11 +563,49 @@ async def sip_webhook(request: Request):
     from_header = sip_headers.get("From", "unknown")
     to_header = sip_headers.get("To", "")
 
+    # Log ALL SIP headers for debugging
+    print(f"[SIP] All SIP headers: {sip_headers}", flush=True)
     print(f"[SIP] Incoming call {call_id} from={from_header} to={to_header}", flush=True)
 
+    # With SIP trunking, the To header is the SIP URI (project ID), not the phone number.
+    # The original dialed number may be in: Diversion header, X-]Original-To, Request-URI,
+    # or we need to look it up from Twilio's Call-ID / custom headers.
+    # Try multiple sources for the called number:
+    # 1. To header (works if it contains a phone number)
+    # 2. Diversion header (Twilio often adds this)
+    # 3. X-]Twilio-* headers
+    # 4. Request-URI header
+    # 5. Fall back to trying ALL phone numbers in the DB
+    
+    lookup_header = to_header
+    # Check if To header actually has a phone number
+    if not re.search(r'sip:(\+?\d+)@', to_header):
+        # To header doesn't have phone - try alternatives
+        for alt_header_name in ['Diversion', 'X-Original-To', 'Request-URI', 'P-Asserted-Identity']:
+            alt_val = sip_headers.get(alt_header_name, '')
+            if alt_val and re.search(r'(\+?\d{10,})', alt_val):
+                print(f"[SIP] Found phone in {alt_header_name}: {alt_val}", flush=True)
+                lookup_header = alt_val
+                break
+    
     # Look up agent
     db = get_service_client()
-    agent_config, agent_phone = _lookup_agent_by_phone(db, to_header)
+    agent_config, agent_phone = _lookup_agent_by_phone(db, lookup_header)
+    
+    # If still not found, try looking up by ALL phone numbers (fallback for single-agent setups)
+    if not agent_config and not re.search(r'sip:(\+?\d+)@', lookup_header):
+        print(f"[SIP] To header has no phone number, trying all agents...", flush=True)
+        # Get all phone numbers and find any active agent
+        all_phones = db.table('phone_number').select('agent_id, phone_number').execute()
+        if all_phones.data:
+            # For now, try each phone number's agent
+            for phone_entry in all_phones.data:
+                agent_data = db.table('agent').select('*').eq('id', phone_entry['agent_id']).single().execute()
+                if agent_data.data:
+                    agent_config = agent_data.data
+                    agent_phone = phone_entry['phone_number']
+                    print(f"[SIP] Matched via fallback to agent {agent_config['id']} phone {agent_phone}", flush=True)
+                    break
 
     if not agent_config:
         print(f"[SIP] No agent found, rejecting call", flush=True)
