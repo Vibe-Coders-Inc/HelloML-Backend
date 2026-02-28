@@ -680,6 +680,9 @@ async def sip_webhook(request: Request):
                 json=session_config
             )
         )
+        if accept_resp.status_code >= 400:
+            print(f"[SIP] Accept call failed: HTTP {accept_resp.status_code} — {accept_resp.text}", flush=True)
+            print(f"[SIP] Session config sent: {json.dumps(session_config, indent=2)[:2000]}", flush=True)
         accept_resp.raise_for_status()
         print(f"[SIP] Call {call_id} accepted (HTTP {accept_resp.status_code})", flush=True)
     except Exception as e:
