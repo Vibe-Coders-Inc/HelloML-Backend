@@ -438,6 +438,18 @@ async def _websocket_monitor(call_id, agent_config, conversation_id, agent_phone
                 'ended_at': 'now()'
             }).eq('id', conversation_id).execute()
             print(f"[SIP-WS] Conversation {conversation_id} marked completed", flush=True)
+
+            # Trigger async resolution analysis (classify spam/legitimate)
+            try:
+                from api.crud.call_resolution import analyze_call
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.ensure_future(analyze_call(conversation_id, db))
+                else:
+                    asyncio.run(analyze_call(conversation_id, db))
+            except Exception as res_err:
+                print(f"[SIP-WS] Resolution analysis failed for {conversation_id}: {res_err}", flush=True)
+
         except Exception as e:
             print(f"[SIP-WS] Error updating conversation: {e}", flush=True)
 

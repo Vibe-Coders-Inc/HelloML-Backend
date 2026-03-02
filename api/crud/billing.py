@@ -351,30 +351,40 @@ async def get_usage(
         agent_id = agent_result.data[0]['id']
 
         # Calculate total minutes from completed conversations in this billing period
-        query = db.table('conversation').select('started_at, ended_at').eq('agent_id', agent_id).eq('status', 'completed').not_.is_('ended_at', 'null')
+        # Exclude credited calls (spam/no_activity) — those don't count toward usage
+        query = db.table('conversation').select('started_at, ended_at, resolution_status').eq('agent_id', agent_id).eq('status', 'completed').not_.is_('ended_at', 'null')
 
         if period_start:
             query = query.gte('started_at', period_start)
 
         conversations = query.execute()
 
-        # Calculate total minutes
+        # Calculate total minutes — skip credited calls (spam/no_activity)
         total_seconds = 0
+        credited_seconds = 0
         for conv in conversations.data:
             if conv.get('started_at') and conv.get('ended_at'):
                 from datetime import datetime
                 start = datetime.fromisoformat(conv['started_at'].replace('Z', '+00:00'))
                 end = datetime.fromisoformat(conv['ended_at'].replace('Z', '+00:00'))
                 duration = (end - start).total_seconds()
-                total_seconds += max(0, duration)
+                duration = max(0, duration)
+
+                resolution = conv.get('resolution_status')
+                if resolution in ('spam', 'no_activity'):
+                    credited_seconds += duration
+                else:
+                    total_seconds += duration
 
         minutes_used = round(total_seconds / 60, 1)
+        credited_minutes = round(credited_seconds / 60, 1)
         overage_minutes = max(0, minutes_used - included_minutes)
 
         return {
             "minutes_used": minutes_used,
             "included_minutes": included_minutes,
             "overage_minutes": overage_minutes,
+            "credited_minutes": credited_minutes,
             "period_start": period_start,
             "period_end": period_end
         }
