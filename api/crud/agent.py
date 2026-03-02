@@ -123,6 +123,9 @@ async def create_agent(
     except HTTPException:
         raise
     except Exception as e:
+        import traceback
+        print(f"[Agent Create ERROR] {type(e).__name__}: {str(e)}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -200,7 +203,8 @@ async def update_agent(
 
         print(f"[Agent Update] Agent {agent_id}: Updating fields: {list(update_data.keys())}")
 
-        update_data['updated_at'] = 'now()'
+        from datetime import datetime, timezone
+        update_data['updated_at'] = datetime.now(timezone.utc).isoformat()
 
         # With RLS, only succeeds if user owns it
         result = db.table('agent').update(update_data).eq('id', agent_id).execute()
@@ -215,6 +219,7 @@ async def update_agent(
     except HTTPException:
         raise
     except Exception as e:
+        import traceback; print(f"[Agent Update ERROR] {agent_id}: {type(e).__name__}: {e}"); traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
