@@ -46,6 +46,9 @@ async def create_business(
         return result.data[0]
 
     except Exception as e:
+        import traceback
+        print(f"[Business Create ERROR] {type(e).__name__}: {str(e)}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
