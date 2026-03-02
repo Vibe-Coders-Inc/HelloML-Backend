@@ -13,7 +13,7 @@ router = APIRouter(prefix="/billing", tags=["Billing"])
 # Initialize Stripe
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_SIGNING_SECRET")
-STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID")  # $5/mo base price
+STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID")  # $29/mo base price
 STRIPE_METERED_PRICE_ID = os.getenv("STRIPE_METERED_PRICE_ID")  # $0.10/min overage
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://helloml.app")
 
@@ -327,7 +327,7 @@ async def get_usage(
         # Get subscription to find billing period
         sub_result = db.table('subscription').select('*').eq('business_id', business_id).eq('status', 'active').execute()
 
-        included_minutes = 100  # Base plan includes 100 minutes
+        included_minutes = 200  # Base plan includes 200 minutes
         period_start = None
         period_end = None
 

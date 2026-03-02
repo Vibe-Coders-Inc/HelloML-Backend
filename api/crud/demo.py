@@ -65,7 +65,7 @@ Rules:
 
 HelloML facts (use only when relevant):
 - AI phone agent: answers calls 24/7, books appointments, handles inquiries
-- $5/mo per agent, 100 min included, $0.10/extra min. No credit card needed.
+- $29/mo per agent, 200 min included, $0.10/extra min. No credit card needed.
 - 2-min setup. Google Calendar integration. Works for any business type.
 - Built by engineers from Apple, LLNL, and Disney.
 
