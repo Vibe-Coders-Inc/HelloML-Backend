@@ -17,6 +17,7 @@ class BusinessCreate(BaseModel):
     address: str
     phone_number: Optional[str] = None
     business_email: Optional[str] = None
+    website: Optional[str] = None
 
 
 class BusinessUpdate(BaseModel):
@@ -24,6 +25,7 @@ class BusinessUpdate(BaseModel):
     address: Optional[str] = None
     phone_number: Optional[str] = None
     business_email: Optional[str] = None
+    website: Optional[str] = None
 
 
 @router.post("", summary="Create business")
@@ -35,13 +37,17 @@ async def create_business(
     try:
         db = current_user.get_db()
 
-        result = db.table('business').insert({
+        insert_data = {
             'owner_user_id': current_user.id,
             'name': business.name,
             'phone_number': business.phone_number,
             'business_email': business.business_email,
             'address': business.address
-        }).execute()
+        }
+        if business.website:
+            insert_data['website'] = business.website
+
+        result = db.table('business').insert(insert_data).execute()
 
         return result.data[0]
 
