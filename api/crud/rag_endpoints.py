@@ -10,6 +10,10 @@ from ..rag import upsert_document_text, semantic_search
 from ..auth import get_current_user, AuthenticatedUser
 import io
 import os
+import re
+import asyncio
+import httpx
+from urllib.parse import urljoin, urlparse
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
 
@@ -181,6 +185,173 @@ async def delete_document(
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class WebsiteIndexRequest(BaseModel):
+    agent_id: int
+    url: str
+
+
+CRAWL_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+}
+
+PRIORITY_PATHS = [
+    '/contact', '/contact-us', '/about', '/about-us',
+    '/services', '/our-services', '/pricing', '/prices',
+    '/faq', '/faqs', '/help', '/support',
+    '/locations', '/location', '/hours',
+    '/team', '/staff', '/menu', '/products',
+]
+
+
+def _strip_html(html: str) -> str:
+    text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<nav[^>]*>.*?</nav>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<footer[^>]*>.*?</footer>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def _find_internal_links(html: str, base_url: str, max_links: int = 20) -> list[str]:
+    parsed_base = urlparse(base_url)
+    base_domain = parsed_base.netloc.lower()
+    hrefs = re.findall(r'href=["\']([^"\']+)["\']', html, re.IGNORECASE)
+
+    candidates = set()
+    for href in hrefs:
+        if href.startswith(('#', 'javascript:', 'mailto:', 'tel:')):
+            continue
+        full_url = urljoin(base_url, href).split('?')[0].split('#')[0]
+        parsed = urlparse(full_url)
+        if parsed.netloc.lower() != base_domain:
+            continue
+        path = parsed.path.rstrip('/').lower()
+        if not path or path == parsed_base.path.rstrip('/').lower():
+            continue
+        if any(path.endswith(ext) for ext in ('.jpg', '.png', '.gif', '.svg', '.css', '.js', '.pdf', '.zip', '.xml')):
+            continue
+        candidates.add(full_url)
+
+    # Sort: priority paths first
+    priority = []
+    other = []
+    for url in candidates:
+        path = urlparse(url).path.rstrip('/').lower()
+        if any(path == p or path.endswith(p) for p in PRIORITY_PATHS):
+            priority.append(url)
+        else:
+            other.append(url)
+
+    return (priority + other)[:max_links]
+
+
+async def _fetch_page(client: httpx.AsyncClient, url: str) -> tuple[str, str]:
+    try:
+        resp = await client.get(url, headers=CRAWL_HEADERS, timeout=10.0)
+        resp.raise_for_status()
+        return (url, resp.text)
+    except Exception:
+        return (url, '')
+
+
+@router.post("/documents/website", summary="Crawl website and index for RAG")
+async def index_website(
+    body: WebsiteIndexRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Crawl a website and its subpages, then index all content into the agent's knowledge base."""
+    try:
+        db = current_user.get_db()
+        service_db = get_service_client()
+
+        # Verify ownership
+        agent = db.table('agent').select('id').eq('id', body.agent_id).execute()
+        if not agent.data:
+            raise HTTPException(status_code=404, detail="Agent not found or access denied")
+
+        url = body.url.strip()
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
+
+        print(f"[RAG-Website] Starting crawl of {url} for agent {body.agent_id}")
+
+        all_pages = []
+
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            # Fetch homepage
+            try:
+                resp = await client.get(url, headers=CRAWL_HEADERS, timeout=15.0)
+                resp.raise_for_status()
+                homepage_html = resp.text
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Could not fetch website: {str(e)}")
+
+            homepage_text = _strip_html(homepage_html)
+            all_pages.append({"url": url, "path": "/", "text": homepage_text})
+
+            # Find and fetch subpages
+            subpage_urls = _find_internal_links(homepage_html, url)
+            if subpage_urls:
+                tasks = [_fetch_page(client, sub_url) for sub_url in subpage_urls]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                for result in results:
+                    if isinstance(result, Exception):
+                        continue
+                    sub_url, sub_html = result
+                    if not sub_html:
+                        continue
+                    sub_text = _strip_html(sub_html)
+                    if len(sub_text) < 50:  # Skip near-empty pages
+                        continue
+                    path = urlparse(sub_url).path or sub_url
+                    all_pages.append({"url": sub_url, "path": path, "text": sub_text})
+
+        print(f"[RAG-Website] Crawled {len(all_pages)} pages from {url}")
+
+        if not all_pages:
+            raise HTTPException(status_code=400, detail="No content found on website")
+
+        # Combine all pages into a single document with page markers
+        combined_parts = []
+        for page in all_pages:
+            combined_parts.append(f"\n--- Page: {page['path']} ({page['url']}) ---\n{page['text']}")
+
+        combined_text = "\n".join(combined_parts)
+        domain = urlparse(url).netloc
+        filename = f"website-{domain}"
+
+        print(f"[RAG-Website] Indexing {len(combined_text)} chars from {len(all_pages)} pages as '{filename}'")
+
+        # Upsert into RAG (replaces any existing website document for this agent)
+        result = upsert_document_text(
+            service_db,
+            ai,
+            agent_id=body.agent_id,
+            filename=filename,
+            text=combined_text,
+            file_type="text/html",
+            storage_url=url
+        )
+
+        print(f"[RAG-Website] Created document {result['document_id']} with {result['chunks']} chunks")
+
+        return {
+            "success": True,
+            "document_id": result["document_id"],
+            "chunks_created": result["chunks"],
+            "pages_crawled": len(all_pages),
+            "filename": filename
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
