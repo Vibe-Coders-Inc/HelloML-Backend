@@ -201,20 +201,9 @@ class TestCallAcceptReject:
         conv_qb.insert.return_value = conv_qb
         conv_resp = MagicMock(); conv_resp.data = [{"id": 99}]
         conv_qb.execute.return_value = conv_resp
-        # existing check returns empty
-        existing_qb = MagicMock()
-        existing_qb.select.return_value = existing_qb
-        existing_qb.eq.return_value = existing_qb
-        existing_qb.limit.return_value = existing_qb
-        ex_resp = MagicMock(); ex_resp.data = []
-        existing_qb.execute.return_value = ex_resp
 
-        call_count = {"n": 0}
         def _table(name):
-            call_count["n"] += 1
             if name == "conversation":
-                if call_count["n"] <= 3:
-                    return existing_qb  # idempotency check
                 return conv_qb
             # business / tool_connection
             qb = MagicMock()
@@ -230,7 +219,8 @@ class TestCallAcceptReject:
              patch("api.crud.sip_voice._check_trial_exhausted", return_value=False), \
              patch("api.crud.sip_voice.get_service_client", return_value=mock_db_inst), \
              patch("api.crud.sip_voice.http_requests") as mock_http, \
-             patch("api.crud.sip_voice.threading"):
+             patch("api.crud.sip_voice.threading"), \
+             patch("api.crud.sip_voice._build_session_config", return_value={"model": "gpt-realtime-1.5"}):
             oc = MagicMock()
             oc.webhooks.unwrap.return_value = ev
             mock_get.return_value = oc
@@ -250,26 +240,42 @@ class TestCallAcceptReject:
 
 class TestIdempotency:
 
-    def test_duplicate_call_id_returns_already_handled(self, client):
+    def test_duplicate_calls_create_separate_conversations(self, client):
+        """Since conversation table has no call_id column, duplicate calls create new conversations."""
         ev = _make_sip_event(call_id="dup-call-1")
 
         mock_db_inst = MagicMock()
-        # existing check returns a row
-        qb = MagicMock()
-        qb.select.return_value = qb; qb.eq.return_value = qb; qb.limit.return_value = qb
-        r = MagicMock(); r.data = [{"id": 55}]; qb.execute.return_value = r
-        mock_db_inst.table.return_value = qb
+        conv_qb = MagicMock()
+        conv_qb.insert.return_value = conv_qb
+        conv_resp = MagicMock(); conv_resp.data = [{"id": 99}]
+        conv_qb.execute.return_value = conv_resp
+
+        def _table(name):
+            if name == "conversation":
+                return conv_qb
+            qb = MagicMock()
+            qb.select.return_value = qb; qb.eq.return_value = qb
+            qb.single.return_value = qb; qb.limit.return_value = qb
+            r = MagicMock(); r.data = []; qb.execute.return_value = r
+            return qb
+
+        mock_db_inst.table = _table
 
         with patch("api.crud.sip_voice._get_openai_client") as mock_get, \
              patch("api.crud.sip_voice._lookup_agent_by_phone", return_value=(AGENT_ROW, "+18005551212")), \
              patch("api.crud.sip_voice._check_trial_exhausted", return_value=False), \
-             patch("api.crud.sip_voice.get_service_client", return_value=mock_db_inst):
+             patch("api.crud.sip_voice.get_service_client", return_value=mock_db_inst), \
+             patch("api.crud.sip_voice.http_requests") as mock_http, \
+             patch("api.crud.sip_voice.threading"), \
+             patch("api.crud.sip_voice._build_session_config", return_value={"model": "gpt-realtime-1.5"}):
             oc = MagicMock()
             oc.webhooks.unwrap.return_value = ev
             mock_get.return_value = oc
+            ar = MagicMock(); ar.status_code = 200; ar.raise_for_status = MagicMock()
+            mock_http.post.return_value = ar
 
             resp = client.post("/conversation/sip/webhook", content=b'{}')
-            assert resp.json()["status"] == "already_handled"
+            assert resp.json()["status"] == "accepted"
 
 
 # ---------------------------------------------------------------------------
@@ -290,10 +296,12 @@ class TestSessionConfig:
         )
 
         assert config["model"] == "gpt-realtime-1.5"
-        assert config["voice"] == "ash"
-        assert config["turn_detection"]["type"] == "semantic_vad"
-        assert config["turn_detection"]["eagerness"] == "low"
-        assert config["input_audio_transcription"]["model"] == "gpt-4o-mini-transcribe"
+        # Voice is nested inside audio.output
+        assert config["audio"]["output"]["voice"] == "ash"
+        # Turn detection is nested inside audio.input
+        assert config["audio"]["input"]["turn_detection"]["type"] == "semantic_vad"
+        assert config["audio"]["input"]["turn_detection"]["eagerness"] == "low"
+        assert config["audio"]["input"]["transcription"]["model"] == "gpt-4o-mini-transcribe"
 
     def test_session_config_includes_tools(self):
         from api.crud.sip_voice import _build_session_config
