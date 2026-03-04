@@ -20,12 +20,32 @@ router = APIRouter(prefix="/integrations", tags=["Integrations"])
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "")
+GOOGLE_DRIVE_REDIRECT_URI = os.getenv("GOOGLE_DRIVE_REDIRECT_URI", "")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://helloml.app")
+
+# Microsoft / Outlook
+MS_CLIENT_ID = os.getenv("MS_CLIENT_ID", "")
+MS_CLIENT_SECRET = os.getenv("MS_CLIENT_SECRET", "")
+MS_REDIRECT_URI = os.getenv("MS_REDIRECT_URI", "")
+MS_TENANT = "common"  # Multi-tenant: personal + work accounts
 
 GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/calendar.app.created",
     "https://www.googleapis.com/auth/calendar.freebusy",
+]
+
+GOOGLE_DRIVE_SCOPES = [
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/drive.readonly",
+]
+
+MS_SCOPES = [
+    "openid",
+    "email",
+    "offline_access",
+    "Calendars.ReadWrite",
+    "User.Read",
 ]
 
 
@@ -121,6 +141,194 @@ async def google_callback(
     ).execute()
 
     print(f"[Integrations] Google Calendar connected for business {business_id} ({account_email})")
+
+    return RedirectResponse(url=f"{FRONTEND_URL}/business/{business_id}#agent")
+
+
+# ── Google Drive OAuth ───────────────────────────────────────────
+
+
+@router.get("/google-drive/auth", summary="Get Google Drive OAuth URL")
+async def google_drive_auth_url(
+    business_id: int = Query(...),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Generate Google Drive OAuth authorization URL."""
+    db = current_user.get_db()
+    verify_business_ownership(db, business_id, current_user.id)
+
+    redirect_uri = GOOGLE_DRIVE_REDIRECT_URI or GOOGLE_REDIRECT_URI.replace(
+        "/google/callback", "/google-drive/callback"
+    )
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": " ".join(GOOGLE_DRIVE_SCOPES),
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": str(business_id),
+    }
+    auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+    return {"auth_url": auth_url}
+
+
+@router.get("/google-drive/callback", summary="Google Drive OAuth callback")
+async def google_drive_callback(
+    code: str = Query(...),
+    state: str = Query(...),
+):
+    """Exchange Google Drive auth code for tokens and store them."""
+    business_id = int(state)
+    db = get_service_client()
+
+    redirect_uri = GOOGLE_DRIVE_REDIRECT_URI or GOOGLE_REDIRECT_URI.replace(
+        "/google/callback", "/google-drive/callback"
+    )
+
+    async with httpx.AsyncClient() as client:
+        token_resp = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code": code,
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code",
+            },
+        )
+
+    if token_resp.status_code != 200:
+        print(f"[Integrations] Google Drive token exchange failed: {token_resp.text}")
+        return RedirectResponse(
+            url=f"{FRONTEND_URL}/business/{business_id}#agent?error=token_exchange_failed"
+        )
+
+    tokens = token_resp.json()
+    access_token = tokens["access_token"]
+    refresh_token = tokens.get("refresh_token", "")
+    expires_in = tokens.get("expires_in", 3600)
+
+    from datetime import timedelta
+    expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+
+    # Fetch user email
+    account_email = None
+    async with httpx.AsyncClient() as client:
+        user_resp = await client.get(
+            "https://www.googleapis.com/oauth2/v2/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if user_resp.status_code == 200:
+            account_email = user_resp.json().get("email")
+
+    db.table("tool_connection").upsert(
+        {
+            "business_id": business_id,
+            "provider": "google-drive",
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_expiry": expiry.isoformat(),
+            "account_email": account_email,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+        on_conflict="business_id,provider",
+    ).execute()
+
+    print(f"[Integrations] Google Drive connected for business {business_id} ({account_email})")
+
+    # Auto-index Drive docs in background
+    import asyncio
+    asyncio.create_task(_index_drive_docs_background(business_id))
+
+    return RedirectResponse(url=f"{FRONTEND_URL}/business/{business_id}#agent")
+
+
+# ── Outlook / Microsoft OAuth ────────────────────────────────────
+
+
+@router.get("/outlook/auth", summary="Get Outlook OAuth URL")
+async def outlook_auth_url(
+    business_id: int = Query(...),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Generate Microsoft OAuth authorization URL for Outlook Calendar."""
+    db = current_user.get_db()
+    verify_business_ownership(db, business_id, current_user.id)
+
+    params = {
+        "client_id": MS_CLIENT_ID,
+        "redirect_uri": MS_REDIRECT_URI,
+        "response_type": "code",
+        "scope": " ".join(MS_SCOPES),
+        "response_mode": "query",
+        "state": str(business_id),
+    }
+    auth_url = f"https://login.microsoftonline.com/{MS_TENANT}/oauth2/v2.0/authorize?{urlencode(params)}"
+    return {"auth_url": auth_url}
+
+
+@router.get("/outlook/callback", summary="Outlook OAuth callback")
+async def outlook_callback(
+    code: str = Query(...),
+    state: str = Query(...),
+):
+    """Exchange Microsoft auth code for tokens and store them."""
+    business_id = int(state)
+    db = get_service_client()
+
+    async with httpx.AsyncClient() as client:
+        token_resp = await client.post(
+            f"https://login.microsoftonline.com/{MS_TENANT}/oauth2/v2.0/token",
+            data={
+                "code": code,
+                "client_id": MS_CLIENT_ID,
+                "client_secret": MS_CLIENT_SECRET,
+                "redirect_uri": MS_REDIRECT_URI,
+                "grant_type": "authorization_code",
+                "scope": " ".join(MS_SCOPES),
+            },
+        )
+
+    if token_resp.status_code != 200:
+        print(f"[Integrations] Outlook token exchange failed: {token_resp.text}")
+        return RedirectResponse(
+            url=f"{FRONTEND_URL}/business/{business_id}#agent?error=token_exchange_failed"
+        )
+
+    tokens = token_resp.json()
+    access_token = tokens["access_token"]
+    refresh_token = tokens.get("refresh_token", "")
+    expires_in = tokens.get("expires_in", 3600)
+
+    from datetime import timedelta
+    expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+
+    # Fetch user email from Microsoft Graph
+    account_email = None
+    async with httpx.AsyncClient() as client:
+        user_resp = await client.get(
+            "https://graph.microsoft.com/v1.0/me",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if user_resp.status_code == 200:
+            user_data = user_resp.json()
+            account_email = user_data.get("mail") or user_data.get("userPrincipalName")
+
+    db.table("tool_connection").upsert(
+        {
+            "business_id": business_id,
+            "provider": "outlook-calendar",
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_expiry": expiry.isoformat(),
+            "account_email": account_email,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+        on_conflict="business_id,provider",
+    ).execute()
+
+    print(f"[Integrations] Outlook connected for business {business_id} ({account_email})")
 
     return RedirectResponse(url=f"{FRONTEND_URL}/business/{business_id}#agent")
 
@@ -526,3 +734,353 @@ async def delete_calendar_event(business_id: int, event_id: str) -> dict:
         return {"error": f"Failed to delete event: {resp.status_code}", "detail": resp.text}
 
     return {"status": "deleted", "id": event_id}
+
+
+# ── Outlook Calendar Helpers ─────────────────────────────────────
+
+
+async def get_outlook_access_token(business_id: int) -> tuple[str, dict]:
+    """
+    Load Outlook tokens from DB, refresh if expired.
+    Returns (access_token, connection_record).
+    """
+    db = get_service_client()
+    result = db.table("tool_connection").select("*").eq(
+        "business_id", business_id
+    ).eq("provider", "outlook-calendar").single().execute()
+
+    if not result.data:
+        raise ValueError("Outlook Calendar not connected")
+
+    conn = result.data
+    access_token = conn["access_token"]
+    refresh_token = conn["refresh_token"]
+    token_expiry = conn.get("token_expiry")
+
+    needs_refresh = True
+    if token_expiry:
+        try:
+            expiry = datetime.fromisoformat(token_expiry.replace("Z", "+00:00"))
+            needs_refresh = datetime.now(timezone.utc) >= expiry
+        except (ValueError, TypeError):
+            needs_refresh = True
+
+    if needs_refresh and refresh_token:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"https://login.microsoftonline.com/{MS_TENANT}/oauth2/v2.0/token",
+                data={
+                    "client_id": MS_CLIENT_ID,
+                    "client_secret": MS_CLIENT_SECRET,
+                    "refresh_token": refresh_token,
+                    "grant_type": "refresh_token",
+                    "scope": " ".join(MS_SCOPES),
+                },
+            )
+
+        if resp.status_code == 200:
+            new_tokens = resp.json()
+            access_token = new_tokens["access_token"]
+            new_refresh = new_tokens.get("refresh_token", refresh_token)
+            expires_in = new_tokens.get("expires_in", 3600)
+            from datetime import timedelta
+            new_expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+
+            db.table("tool_connection").update({
+                "access_token": access_token,
+                "refresh_token": new_refresh,
+                "token_expiry": new_expiry.isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("business_id", business_id).eq("provider", "outlook-calendar").execute()
+
+            conn["access_token"] = access_token
+            print(f"[Integrations] Refreshed Outlook token for business {business_id}")
+        else:
+            print(f"[Integrations] Outlook token refresh failed: {resp.text}")
+            raise ValueError("Failed to refresh Outlook token")
+
+    return access_token, conn
+
+
+async def outlook_check_availability(
+    business_id: int,
+    time_min: str,
+    time_max: str,
+    timezone_str: str = "America/Chicago",
+) -> dict:
+    """Check Outlook calendar availability using Microsoft Graph."""
+    access_token, conn = await get_outlook_access_token(business_id)
+    account_email = conn.get("account_email")
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://graph.microsoft.com/v1.0/me/calendar/getSchedule",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "schedules": [account_email],
+                "startTime": {"dateTime": time_min, "timeZone": timezone_str},
+                "endTime": {"dateTime": time_max, "timeZone": timezone_str},
+                "availabilityViewInterval": 30,
+            },
+        )
+
+    if resp.status_code != 200:
+        return {"error": f"Outlook API error: {resp.status_code}", "detail": resp.text}
+
+    data = resp.json()
+    schedules = data.get("value", [])
+    busy_slots = []
+    for schedule in schedules:
+        for item in schedule.get("scheduleItems", []):
+            busy_slots.append({
+                "start": item.get("start", {}).get("dateTime"),
+                "end": item.get("end", {}).get("dateTime"),
+                "subject": item.get("subject", "Busy"),
+                "status": item.get("status", "busy"),
+            })
+
+    return {
+        "busy": busy_slots,
+        "count": len(busy_slots),
+        "time_min": time_min,
+        "time_max": time_max,
+    }
+
+
+async def outlook_create_event(
+    business_id: int,
+    summary: str,
+    start_datetime: str,
+    end_datetime: str,
+    description: str = "",
+    timezone_str: str = "America/Chicago",
+) -> dict:
+    """Create an event on Outlook calendar via Microsoft Graph."""
+    access_token, _ = await get_outlook_access_token(business_id)
+
+    event_body = {
+        "subject": summary,
+        "start": {"dateTime": start_datetime, "timeZone": timezone_str},
+        "end": {"dateTime": end_datetime, "timeZone": timezone_str},
+    }
+    if description:
+        event_body["body"] = {"contentType": "text", "content": description}
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://graph.microsoft.com/v1.0/me/events",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json=event_body,
+        )
+
+    if resp.status_code not in (200, 201):
+        return {"error": f"Failed to create Outlook event: {resp.status_code}", "detail": resp.text}
+
+    created = resp.json()
+    return {
+        "status": "created",
+        "id": created.get("id"),
+        "summary": created.get("subject"),
+        "start": created.get("start", {}).get("dateTime"),
+        "end": created.get("end", {}).get("dateTime"),
+        "link": created.get("webLink"),
+    }
+
+
+# ── Google Drive Helpers ─────────────────────────────────────────
+
+
+async def get_google_drive_access_token(business_id: int) -> str:
+    """Load Google Drive tokens from DB, refresh if expired. Returns access_token."""
+    db = get_service_client()
+    result = db.table("tool_connection").select("*").eq(
+        "business_id", business_id
+    ).eq("provider", "google-drive").single().execute()
+
+    if not result.data:
+        raise ValueError("Google Drive not connected")
+
+    conn = result.data
+    access_token = conn["access_token"]
+    refresh_token = conn["refresh_token"]
+    token_expiry = conn.get("token_expiry")
+
+    needs_refresh = True
+    if token_expiry:
+        try:
+            expiry = datetime.fromisoformat(token_expiry.replace("Z", "+00:00"))
+            needs_refresh = datetime.now(timezone.utc) >= expiry
+        except (ValueError, TypeError):
+            needs_refresh = True
+
+    if needs_refresh and refresh_token:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "client_id": GOOGLE_CLIENT_ID,
+                    "client_secret": GOOGLE_CLIENT_SECRET,
+                    "refresh_token": refresh_token,
+                    "grant_type": "refresh_token",
+                },
+            )
+
+        if resp.status_code == 200:
+            new_tokens = resp.json()
+            access_token = new_tokens["access_token"]
+            expires_in = new_tokens.get("expires_in", 3600)
+            from datetime import timedelta
+            new_expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+
+            db.table("tool_connection").update({
+                "access_token": access_token,
+                "token_expiry": new_expiry.isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("business_id", business_id).eq("provider", "google-drive").execute()
+
+            print(f"[Integrations] Refreshed Google Drive token for business {business_id}")
+        else:
+            print(f"[Integrations] Google Drive token refresh failed: {resp.text}")
+            raise ValueError("Failed to refresh Google Drive token")
+
+    return access_token
+
+
+async def list_drive_docs(business_id: int, max_results: int = 50) -> list:
+    """
+    List text-based documents from Google Drive.
+    Returns docs, spreadsheets, PDFs, and text files.
+    """
+    access_token = await get_google_drive_access_token(business_id)
+
+    # Search for readable document types
+    query = (
+        "mimeType='application/vnd.google-apps.document' or "
+        "mimeType='application/vnd.google-apps.spreadsheet' or "
+        "mimeType='application/pdf' or "
+        "mimeType='text/plain' or "
+        "mimeType='text/csv'"
+    )
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            "https://www.googleapis.com/drive/v3/files",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={
+                "q": f"({query}) and trashed=false",
+                "fields": "files(id,name,mimeType,modifiedTime,size)",
+                "pageSize": max_results,
+                "orderBy": "modifiedTime desc",
+            },
+        )
+
+    if resp.status_code != 200:
+        print(f"[Drive] List files error: {resp.status_code} - {resp.text}")
+        return []
+
+    return resp.json().get("files", [])
+
+
+async def export_drive_doc_text(business_id: int, file_id: str, mime_type: str) -> str:
+    """Export a Drive document as plain text."""
+    access_token = await get_google_drive_access_token(business_id)
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        if mime_type.startswith("application/vnd.google-apps."):
+            # Google Docs/Sheets — use export
+            resp = await client.get(
+                f"https://www.googleapis.com/drive/v3/files/{file_id}/export",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params={"mimeType": "text/plain"},
+            )
+        else:
+            # Regular files — download directly
+            resp = await client.get(
+                f"https://www.googleapis.com/drive/v3/files/{file_id}",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params={"alt": "media"},
+            )
+
+    if resp.status_code != 200:
+        print(f"[Drive] Export error for {file_id}: {resp.status_code}")
+        return ""
+
+    return resp.text[:50000]  # Cap at 50k chars per doc
+
+
+async def index_drive_docs(business_id: int) -> dict:
+    """
+    Index all readable Google Drive documents into the RAG pipeline.
+    Uses the existing upsert_document_text for chunking + embedding.
+    """
+    from api.rag import upsert_document_text
+    from openai import OpenAI
+
+    db = get_service_client()
+    ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    # Get agent_id for this business
+    agent_data = db.table("agent").select("id").eq("business_id", business_id).limit(1).execute()
+    if not agent_data.data:
+        return {"error": "No agent found for this business"}
+    agent_id = agent_data.data[0]["id"]
+
+    docs = await list_drive_docs(business_id)
+    if not docs:
+        return {"indexed": 0, "message": "No documents found in Google Drive"}
+
+    indexed = 0
+    errors = 0
+    for doc in docs:
+        try:
+            text = await export_drive_doc_text(business_id, doc["id"], doc["mimeType"])
+            if not text or len(text.strip()) < 20:
+                continue
+
+            # Use filename as document identifier
+            filename = f"drive:{doc['name']}"
+            upsert_document_text(
+                sb=db,
+                ai=ai,
+                agent_id=agent_id,
+                filename=filename,
+                text=text,
+            )
+            indexed += 1
+            print(f"[Drive] Indexed: {doc['name']} ({len(text)} chars)")
+        except Exception as e:
+            errors += 1
+            print(f"[Drive] Error indexing {doc.get('name', 'unknown')}: {e}")
+
+    return {"indexed": indexed, "errors": errors, "total_found": len(docs)}
+
+
+async def _index_drive_docs_background(business_id: int):
+    """Background task to index Drive docs after OAuth connection."""
+    try:
+        result = await index_drive_docs(business_id)
+        print(f"[Drive] Background indexing complete for business {business_id}: {result}")
+    except Exception as e:
+        print(f"[Drive] Background indexing failed for business {business_id}: {e}")
+
+
+# ── Drive indexing endpoint ──────────────────────────────────────
+
+
+@router.post("/{business_id}/google-drive/index", summary="Index Google Drive documents")
+async def trigger_drive_index(
+    business_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Manually trigger re-indexing of Google Drive documents into RAG."""
+    db = current_user.get_db()
+    verify_business_ownership(db, business_id, current_user.id)
+
+    result = await index_drive_docs(business_id)
+    return result

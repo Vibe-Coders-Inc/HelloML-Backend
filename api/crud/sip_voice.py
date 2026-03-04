@@ -190,7 +190,8 @@ def _build_session_config(agent_config, business_info, agent_phone, connected_to
         }
     ]
 
-    if 'google-calendar' in (connected_tools or []):
+    has_calendar = 'google-calendar' in (connected_tools or []) or 'outlook-calendar' in (connected_tools or [])
+    if has_calendar:
         tools.append({
             "type": "function",
             "name": "check_calendar",
@@ -534,15 +535,23 @@ async def _handle_function_call(ws, item, agent_id, conversation_id, business_id
             result = {"success": True, "message": f"Call ended: {reason}"}
 
         elif function_name == "check_calendar":
-            from api.crud.integrations import check_availability
             date_str = args.get("date", "")
             time_min = f"{date_str}T00:00:00Z"
             time_max = f"{date_str}T23:59:59Z"
-            result = await check_availability(business_id, time_min, time_max)
+            if 'outlook-calendar' in (connected_tools or []):
+                from api.crud.integrations import outlook_check_availability
+                result = await outlook_check_availability(business_id, time_min, time_max)
+            else:
+                from api.crud.integrations import check_availability
+                result = await check_availability(business_id, time_min, time_max)
 
         elif function_name == "create_calendar_event":
-            from api.crud.integrations import create_calendar_event, check_availability
-            cal_settings = (tool_settings or {}).get('google-calendar', {})
+            if 'outlook-calendar' in (connected_tools or []):
+                from api.crud.integrations import outlook_create_event
+            else:
+                from api.crud.integrations import create_calendar_event
+            cal_provider = 'outlook-calendar' if 'outlook-calendar' in (connected_tools or []) else 'google-calendar'
+            cal_settings = (tool_settings or {}).get(cal_provider, {})
             default_duration = cal_settings.get('default_duration', 30)
             allow_conflicts = cal_settings.get('allow_conflicts', False)
             biz_start = cal_settings.get('business_hours_start', '09:00')
@@ -561,16 +570,22 @@ async def _handle_function_call(ws, item, agent_id, conversation_id, business_id
                     total = int(parts[0]) * 60 + int(parts[1]) + default_duration
                     end_time = f"{total // 60:02d}:{total % 60:02d}"
 
+            # Pick the right calendar provider
+            _create_fn = outlook_create_event if 'outlook-calendar' in (connected_tools or []) else create_calendar_event
+
             if start_time < biz_start or end_time > biz_end:
                 result = {"error": f"Must be within business hours ({biz_start}-{biz_end})."}
             elif not allow_conflicts:
-                avail = await check_availability(business_id, f"{date}T{start_time}:00Z", f"{date}T{end_time}:00Z")
+                if 'outlook-calendar' in (connected_tools or []):
+                    avail = await outlook_check_availability(business_id, f"{date}T{start_time}:00Z", f"{date}T{end_time}:00Z")
+                else:
+                    avail = await check_availability(business_id, f"{date}T{start_time}:00Z", f"{date}T{end_time}:00Z")
                 if avail.get('busy') and len(avail['busy']) > 0:
                     result = {"error": "Time slot conflict."}
                 else:
-                    result = await create_calendar_event(business_id=business_id, summary=summary, start_datetime=f"{date}T{start_time}:00", end_datetime=f"{date}T{end_time}:00", description=description)
+                    result = await _create_fn(business_id=business_id, summary=summary, start_datetime=f"{date}T{start_time}:00", end_datetime=f"{date}T{end_time}:00", description=description)
             else:
-                result = await create_calendar_event(business_id=business_id, summary=summary, start_datetime=f"{date}T{start_time}:00", end_datetime=f"{date}T{end_time}:00", description=description)
+                result = await _create_fn(business_id=business_id, summary=summary, start_datetime=f"{date}T{start_time}:00", end_datetime=f"{date}T{end_time}:00", description=description)
         else:
             result = {"error": f"Unknown function: {function_name}"}
 

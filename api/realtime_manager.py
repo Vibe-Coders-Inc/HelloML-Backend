@@ -167,7 +167,8 @@ class RealtimeSession:
         ]
 
         # Add calendar tools if Google Calendar is connected
-        if 'google-calendar' in self.connected_tools:
+        has_calendar = 'google-calendar' in self.connected_tools or 'outlook-calendar' in self.connected_tools
+        if has_calendar:
             tools.append(self._get_calendar_check_tool())
             tools.append(self._get_calendar_create_tool())
 
@@ -791,19 +792,22 @@ Sample clarification phrases:
             }
 
     async def _execute_check_calendar(self, date_str: str) -> Dict[str, Any]:
-        """Check calendar availability for a given date using freebusy API."""
+        """Check calendar availability for a given date."""
         try:
-            from api.crud.integrations import check_availability
-
             business_id = self.agent_config.get('business_id')
             if not business_id:
                 return {"error": "No business associated with this agent"}
 
-            # Build time range for the full day
             time_min = f"{date_str}T00:00:00Z"
             time_max = f"{date_str}T23:59:59Z"
 
-            result = await check_availability(business_id, time_min, time_max)
+            if 'outlook-calendar' in self.connected_tools:
+                from api.crud.integrations import outlook_check_availability
+                result = await outlook_check_availability(business_id, time_min, time_max)
+            else:
+                from api.crud.integrations import check_availability
+                result = await check_availability(business_id, time_min, time_max)
+
             print(f"[Calendar] check_calendar for {date_str}: {result.get('count', 0)} busy slots")
             return result
 
@@ -812,17 +816,22 @@ Sample clarification phrases:
             return {"error": str(e)}
 
     async def _execute_create_calendar_event(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a Google Calendar event with settings enforcement."""
+        """Create a calendar event (Google or Outlook) with settings enforcement."""
         try:
-            from api.crud.integrations import create_calendar_event, check_availability
             from datetime import datetime, timedelta
+            use_outlook = 'outlook-calendar' in self.connected_tools
+            if use_outlook:
+                from api.crud.integrations import outlook_create_event as _create_event, outlook_check_availability as _check_avail
+            else:
+                from api.crud.integrations import create_calendar_event as _create_event, check_availability as _check_avail
 
             business_id = self.agent_config.get('business_id')
             if not business_id:
                 return {"error": "No business associated with this agent"}
 
             # Get calendar settings
-            cal_settings = self.tool_settings.get('google-calendar', {})
+            cal_provider = 'outlook-calendar' if use_outlook else 'google-calendar'
+            cal_settings = self.tool_settings.get(cal_provider, {})
             default_duration = cal_settings.get('default_duration', 30)
             allow_conflicts = cal_settings.get('allow_conflicts', False)
             booking_window = cal_settings.get('booking_window_days', 30)
@@ -871,7 +880,7 @@ Sample clarification phrases:
             if not allow_conflicts:
                 time_min = f"{date}T{start_time}:00Z"
                 time_max = f"{date}T{end_time}:00Z"
-                availability = await check_availability(business_id, time_min, time_max)
+                availability = await _check_avail(business_id, time_min, time_max)
                 if availability.get('busy') and len(availability['busy']) > 0:
                     conflicting = availability['busy'][0]
                     return {
@@ -881,7 +890,7 @@ Sample clarification phrases:
             start_dt = f"{date}T{start_time}:00"
             end_dt = f"{date}T{end_time}:00"
 
-            result = await create_calendar_event(
+            result = await _create_event(
                 business_id=business_id,
                 summary=summary,
                 start_datetime=start_dt,
