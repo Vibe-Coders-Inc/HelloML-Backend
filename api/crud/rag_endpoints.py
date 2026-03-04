@@ -212,6 +212,7 @@ def _strip_html(html: str) -> str:
     text = re.sub(r'<nav[^>]*>.*?</nav>', '', text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r'<footer[^>]*>.*?</footer>', '', text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r'<[^>]+>', ' ', text)
+    text = text.replace('\x00', '')  # PostgreSQL doesn't support null bytes
     return re.sub(r'\s+', ' ', text).strip()
 
 

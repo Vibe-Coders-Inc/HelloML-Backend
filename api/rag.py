@@ -87,6 +87,9 @@ def upsert_document_text(sb, ai, agent_id, filename, text,
             raise RuntimeError("Failed to insert document row.")
         doc_id = doc_res.data[0]["id"]
 
+    # Strip null bytes (PostgreSQL can't store \u0000 in text columns)
+    text = text.replace('\x00', '')
+
     # Split text into smaller chunks
     chunks = chunk_text(text)
     if not chunks:
