@@ -1084,3 +1084,82 @@ async def trigger_drive_index(
 
     result = await index_drive_docs(business_id)
     return result
+
+
+@router.get("/{business_id}/google-drive/folders", summary="List Google Drive folders")
+async def list_drive_folders(
+    business_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """List folders from Google Drive for folder selection UI."""
+    db = current_user.get_db()
+    verify_business_ownership(db, business_id, current_user.id)
+
+    access_token = await get_google_drive_access_token(business_id)
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            "https://www.googleapis.com/drive/v3/files",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={
+                "q": "mimeType='application/vnd.google-apps.folder' and trashed=false",
+                "fields": "files(id,name,parents)",
+                "pageSize": 100,
+                "orderBy": "name",
+            },
+        )
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail="Failed to list Drive folders")
+
+    folders = resp.json().get("files", [])
+    # Add a "My Drive (All)" option at the top
+    return {"folders": [{"id": "root", "name": "My Drive (All files)"}] + folders}
+
+
+@router.get("/{business_id}/calendars", summary="List available calendars")
+async def list_calendars(
+    business_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """List calendars from connected Google or Outlook account."""
+    db = current_user.get_db()
+    verify_business_ownership(db, business_id, current_user.id)
+
+    # Check which calendar provider is connected
+    result = db.table("tool_connection").select("provider, access_token, refresh_token").eq(
+        "business_id", business_id
+    ).in_("provider", ["google-calendar", "outlook-calendar"]).execute()
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="No calendar connected")
+
+    conn = result.data[0]
+    provider = conn["provider"]
+
+    if provider == "google-calendar":
+        access_token, _ = await get_google_access_token(business_id)
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://www.googleapis.com/calendar/v3/users/me/calendarList",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params={"minAccessRole": "writer"},
+            )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail="Failed to list Google calendars")
+        items = resp.json().get("items", [])
+        return {"calendars": [{"id": c["id"], "name": c.get("summary", c["id"]), "primary": c.get("primary", False)} for c in items]}
+
+    elif provider == "outlook-calendar":
+        access_token, _ = await get_outlook_access_token(business_id)
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://graph.microsoft.com/v1.0/me/calendars",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail="Failed to list Outlook calendars")
+        items = resp.json().get("value", [])
+        return {"calendars": [{"id": c["id"], "name": c.get("name", "Calendar"), "primary": c.get("isDefaultCalendar", False)} for c in items]}
+
+    raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
