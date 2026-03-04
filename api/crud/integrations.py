@@ -37,7 +37,7 @@ GOOGLE_SCOPES = [
 
 GOOGLE_DRIVE_SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive.file",
 ]
 
 MS_SCOPES = [
@@ -1084,6 +1084,65 @@ async def trigger_drive_index(
 
     result = await index_drive_docs(business_id)
     return result
+
+
+@router.post("/{business_id}/google-drive/index-files", summary="Index specific Google Drive files by ID")
+async def index_drive_files_by_id(
+    business_id: int,
+    body: dict,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Index specific files selected via Google Picker. Body: { file_ids: [{ id, name, mimeType }] }"""
+    db = current_user.get_db()
+    verify_business_ownership(db, business_id, current_user.id)
+
+    file_ids = body.get("file_ids", [])
+    if not file_ids:
+        raise HTTPException(status_code=400, detail="No file_ids provided")
+
+    from api.rag import upsert_document_text
+    from openai import OpenAI
+
+    sdb = get_service_client()
+    ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    agent_data = sdb.table("agent").select("id").eq("business_id", business_id).limit(1).execute()
+    if not agent_data.data:
+        raise HTTPException(status_code=404, detail="No agent found for this business")
+    agent_id = agent_data.data[0]["id"]
+
+    indexed = 0
+    errors = 0
+    for file_info in file_ids:
+        try:
+            file_id = file_info["id"]
+            name = file_info.get("name", "unknown")
+            mime_type = file_info.get("mimeType", "")
+            text = await export_drive_doc_text(business_id, file_id, mime_type)
+            if not text or len(text.strip()) < 20:
+                continue
+            filename = f"drive:{name}"
+            upsert_document_text(sb=sdb, ai=ai, agent_id=agent_id, filename=filename, text=text)
+            indexed += 1
+            print(f"[Drive] Indexed via Picker: {name} ({len(text)} chars)")
+        except Exception as e:
+            errors += 1
+            print(f"[Drive] Error indexing {file_info.get('name', 'unknown')}: {e}")
+
+    return {"indexed": indexed, "errors": errors, "total": len(file_ids)}
+
+
+@router.get("/{business_id}/google-drive/picker-token", summary="Get Drive access token for Google Picker")
+async def get_drive_picker_token(
+    business_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Return a fresh access token for use with Google Picker on the frontend."""
+    db = current_user.get_db()
+    verify_business_ownership(db, business_id, current_user.id)
+
+    access_token = await get_google_drive_access_token(business_id)
+    return {"access_token": access_token}
 
 
 @router.get("/{business_id}/google-drive/folders", summary="List Google Drive folders")
