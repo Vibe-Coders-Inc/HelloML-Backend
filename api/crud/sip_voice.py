@@ -125,6 +125,16 @@ def _check_trial_exhausted(db, agent_config):
     return False
 
 
+def _get_urgency_description(level: str) -> str:
+    """Get human-readable urgency description for forwarding."""
+    descriptions = {
+        'low': 'any request to speak with a person',
+        'medium': 'genuinely urgent situations — angry callers who insist, emergencies, complex issues you cannot resolve',
+        'high': 'true emergencies only — medical, safety, or threatening situations',
+    }
+    return descriptions.get(level, descriptions['medium'])
+
+
 def _build_session_config(agent_config, business_info, agent_phone, connected_tools, tool_settings):
     """Build the session config for accepting a SIP call (same logic as realtime_manager)."""
     default_prompt = (
@@ -218,6 +228,24 @@ def _build_session_config(agent_config, business_info, agent_phone, connected_to
                     "description": {"type": "string", "description": "Optional notes"}
                 },
                 "required": ["summary", "date", "start_time", "end_time"]
+            }
+        })
+
+    # Add transfer tool if forwarding is enabled
+    if agent_config.get('forwarding_enabled') and agent_config.get('forwarding_number'):
+        tools.append({
+            "type": "function",
+            "name": "transfer_to_human",
+            "description": "Transfer this call to a human representative. ONLY use this when the situation genuinely requires human intervention - not just because you don't know an answer. Valid reasons: angry/upset caller who insists on speaking to a person, medical or safety emergency, complex billing dispute, caller explicitly and repeatedly demands a human after you've tried to help.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Brief reason for the transfer"
+                    }
+                },
+                "required": ["reason"]
             }
         })
 
@@ -317,6 +345,15 @@ When you see "[Call connected]", say exactly: "{greeting}"
 
 {base_instructions}"""
 
+    # Add forwarding instructions if enabled
+    if agent_config.get('forwarding_enabled') and agent_config.get('forwarding_number'):
+        urgency = agent_config.get('forwarding_urgency', 'medium')
+        urgency_desc = _get_urgency_description(urgency)
+        instructions += f"""
+
+# Call Transfer
+If a situation genuinely requires human help and the caller insists after you've tried to assist them, you can transfer the call. Only do this for {urgency_desc}. Never mention that you're checking if transfer is available — just say "Let me connect you with someone who can help." """
+
     voice = agent_config.get('voice_model', 'ash')
     model = agent_config.get('model_type') or 'gpt-realtime-1.5'
 
@@ -363,6 +400,16 @@ async def _websocket_monitor(call_id, agent_config, conversation_id, agent_phone
     agent_id = agent_config['id']
     business_id = agent_config.get('business_id')
     greeting = agent_config.get('greeting', 'Hello! How can I help you today?')
+
+    # Fetch business info for transfer checks
+    business_info = {}
+    if business_id:
+        try:
+            biz_data = db.table('business').select('*').eq('id', business_id).single().execute()
+            if biz_data.data:
+                business_info = biz_data.data
+        except Exception:
+            pass
 
     try:
         async with websockets.connect(
@@ -444,7 +491,8 @@ async def _websocket_monitor(call_id, agent_config, conversation_id, agent_phone
                     if item.get("type") == "function_call":
                         await _handle_function_call(
                             ws, item, agent_id, conversation_id,
-                            business_id, call_id, connected_tools, tool_settings, db
+                            business_id, call_id, connected_tools, tool_settings, db,
+                            agent_config=agent_config, business_info=business_info
                         )
 
                 # Session events
@@ -488,7 +536,7 @@ async def _websocket_monitor(call_id, agent_config, conversation_id, agent_phone
             print(f"[SIP-WS] Error updating conversation: {e}", flush=True)
 
 
-async def _handle_function_call(ws, item, agent_id, conversation_id, business_id, call_id, connected_tools, tool_settings, db):
+async def _handle_function_call(ws, item, agent_id, conversation_id, business_id, call_id, connected_tools, tool_settings, db, agent_config=None, business_info=None):
     """Handle function calls from the Realtime API."""
     call_fn_id = item.get("call_id")
     function_name = item.get("name")
@@ -544,6 +592,46 @@ async def _handle_function_call(ws, item, agent_id, conversation_id, business_id
             else:
                 from api.crud.integrations import check_availability
                 result = await check_availability(business_id, time_min, time_max)
+
+        elif function_name == "transfer_to_human":
+            reason = args.get("reason", "Caller requested transfer")
+            print(f"[SIP Function] Transfer requested: {reason}", flush=True)
+            from api.call_transfer import should_transfer, transfer_call
+            agent_data = agent_config or {}
+            biz_data = business_info or {}
+            allowed, transfer_reason = should_transfer(agent_data, biz_data)
+            if not allowed:
+                result = {"success": False, "message": f"I'm unable to transfer you right now as it's {transfer_reason.lower()}. Can I help you with anything else?"}
+            else:
+                # Get the Twilio call SID from the caller_phone via Twilio API
+                forwarding_number = agent_data.get('forwarding_number', '')
+                # For SIP calls via OpenAI, we don't have a Twilio call SID directly.
+                # The call_id is the OpenAI call ID. We need to hang up the OpenAI call
+                # and the transfer happens via Twilio SIP trunking.
+                # For now, use Twilio API to find the active call and redirect it.
+                try:
+                    from twilio.rest import Client as TwilioClient
+                    twilio_sid = os.getenv("ACCOUNT_SID")
+                    twilio_token = os.getenv("AUTH_TOKEN")
+                    twilio_client = TwilioClient(twilio_sid, twilio_token)
+                    # Find the active call to the agent's phone number
+                    active_calls = twilio_client.calls.list(
+                        to=agent_phone,
+                        status='in-progress',
+                        limit=1
+                    )
+                    if active_calls:
+                        twilio_call_sid = active_calls[0].sid
+                        transfer_result = transfer_call(twilio_call_sid, forwarding_number)
+                        if transfer_result.get('success'):
+                            result = {"success": True, "message": "Transferring you now. Please hold."}
+                        else:
+                            result = {"success": False, "message": "I wasn't able to complete the transfer. Can I help you with anything else?"}
+                    else:
+                        result = {"success": False, "message": "I wasn't able to complete the transfer. Can I help you with anything else?"}
+                except Exception as te:
+                    print(f"[SIP Function] Transfer error: {te}", flush=True)
+                    result = {"success": False, "message": "I wasn't able to complete the transfer. Can I help you with anything else?"}
 
         elif function_name == "create_calendar_event":
             if 'outlook-calendar' in (connected_tools or []):

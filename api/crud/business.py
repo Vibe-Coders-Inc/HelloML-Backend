@@ -18,6 +18,9 @@ class BusinessCreate(BaseModel):
     phone_number: Optional[str] = None
     business_email: Optional[str] = None
     website: Optional[str] = None
+    business_hours_start: Optional[str] = '09:00'
+    business_hours_end: Optional[str] = '17:00'
+    business_timezone: Optional[str] = 'America/Los_Angeles'
 
 
 class BusinessUpdate(BaseModel):
@@ -26,6 +29,9 @@ class BusinessUpdate(BaseModel):
     phone_number: Optional[str] = None
     business_email: Optional[str] = None
     website: Optional[str] = None
+    business_hours_start: Optional[str] = None
+    business_hours_end: Optional[str] = None
+    business_timezone: Optional[str] = None
 
 
 @router.post("", summary="Create business")

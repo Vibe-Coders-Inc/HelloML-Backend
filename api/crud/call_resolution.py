@@ -9,7 +9,9 @@ Heuristics:
   - GPT-4o-mini classifies transcript for telemarketing / spam / no-activity
 
 Resolution statuses:
-  - "legitimate" — normal call, counts toward minutes
+  - "resolved" — customer issue was addressed, counts toward minutes
+  - "unresolved" — real customer but issue NOT resolved, credited back
+  - "legitimate" — legacy category (pre-v2), counts toward minutes
   - "spam" — telemarketing / robocall / spam, credited back
   - "no_activity" — silence / immediate hangup, credited back
   - "pending" — awaiting analysis
@@ -35,7 +37,8 @@ You are a call classification system. Analyze this phone call transcript and cla
 Classify as ONE of:
 - "spam": Telemarketing, robocalls, scam calls, automated messages, sales pitches the business didn't request
 - "no_activity": No meaningful conversation happened — silence, immediate hangup, wrong number with no interaction, only a greeting with no response
-- "legitimate": A real customer or person with a genuine inquiry, appointment request, question, or business interaction
+- "unresolved": A real customer called with a legitimate question or request, but the agent could NOT help them. The customer's issue was NOT resolved. Examples: agent didn't have the answer, customer gave up frustrated, customer needed something the agent couldn't provide.
+- "resolved": A real customer called and their question/request WAS addressed. The agent successfully helped them. Examples: question answered, appointment booked, information provided, issue resolved.
 
 Transcript:
 {transcript}
@@ -43,7 +46,7 @@ Transcript:
 Call duration: {duration_seconds} seconds
 
 Respond with ONLY a JSON object:
-{{"classification": "spam"|"no_activity"|"legitimate", "reason": "brief explanation"}}\
+{{"classification": "spam"|"no_activity"|"unresolved"|"resolved", "reason": "brief explanation"}}\
 """
 
 
@@ -98,14 +101,14 @@ async def analyze_call(conversation_id: int, db=None) -> ResolutionResult:
 
     # Only analyze completed conversations
     if conv.get('status') != 'completed':
-        return ResolutionResult(classification="legitimate", reason="Call not completed, skipping analysis")
+        return ResolutionResult(classification="resolved", reason="Call not completed, skipping analysis")
 
     # Calculate duration
     started_at = conv.get('started_at')
     ended_at = conv.get('ended_at')
 
     if not started_at or not ended_at:
-        return ResolutionResult(classification="legitimate", reason="Missing timestamps")
+        return ResolutionResult(classification="resolved", reason="Missing timestamps")
 
     duration = _calculate_duration_seconds(started_at, ended_at)
 
@@ -134,7 +137,7 @@ async def analyze_call(conversation_id: int, db=None) -> ResolutionResult:
         except Exception as e:
             print(f"[Resolution] AI classification failed for {conversation_id}: {e}", flush=True)
             # Default to legitimate if AI fails — don't wrongly credit
-            result = ResolutionResult(classification="legitimate", reason=f"AI classification failed: {str(e)}")
+            result = ResolutionResult(classification="resolved", reason=f"AI classification failed: {str(e)}")
             _save_resolution(db, conversation_id, result)
             return result
 
@@ -145,7 +148,7 @@ async def analyze_call(conversation_id: int, db=None) -> ResolutionResult:
         return result
     except Exception as e:
         print(f"[Resolution] AI classification failed for {conversation_id}: {e}", flush=True)
-        result = ResolutionResult(classification="legitimate", reason=f"AI classification failed: {str(e)}")
+        result = ResolutionResult(classification="resolved", reason=f"AI classification failed: {str(e)}")
         _save_resolution(db, conversation_id, result)
         return result
 
@@ -170,13 +173,13 @@ def _classify_with_ai(transcript: str, duration_seconds: float) -> ResolutionRes
     content = response.choices[0].message.content
     parsed = json.loads(content)
 
-    classification = parsed.get("classification", "legitimate")
+    classification = parsed.get("classification", "resolved")
     reason = parsed.get("reason", "No reason provided")
 
     # Validate classification
-    valid_classifications = {"spam", "no_activity", "legitimate"}
+    valid_classifications = {"spam", "no_activity", "unresolved", "resolved", "legitimate"}
     if classification not in valid_classifications:
-        classification = "legitimate"
+        classification = "resolved"
 
     return ResolutionResult(classification=classification, reason=reason)
 
@@ -262,7 +265,7 @@ async def get_resolution_summary(
         # Get agent
         agent_result = db.table('agent').select('id').eq('business_id', business_id).execute()
         if not agent_result.data:
-            return {"total_calls": 0, "legitimate": 0, "spam": 0, "no_activity": 0, "credited_minutes": 0}
+            return {"total_calls": 0, "resolved": 0, "unresolved": 0, "legitimate": 0, "spam": 0, "no_activity": 0, "credited_minutes": 0}
 
         agent_id = agent_result.data[0]['id']
 
@@ -271,7 +274,7 @@ async def get_resolution_summary(
             'resolution_status, started_at, ended_at'
         ).eq('agent_id', agent_id).eq('status', 'completed').execute()
 
-        summary = {"total_calls": 0, "legitimate": 0, "spam": 0, "no_activity": 0, "pending": 0, "credited_minutes": 0.0}
+        summary = {"total_calls": 0, "resolved": 0, "unresolved": 0, "legitimate": 0, "spam": 0, "no_activity": 0, "pending": 0, "credited_minutes": 0.0}
 
         for conv in convs.data:
             summary["total_calls"] += 1
@@ -280,8 +283,8 @@ async def get_resolution_summary(
             if status in summary:
                 summary[status] += 1
 
-            # Calculate credited minutes
-            if status in ('spam', 'no_activity'):
+            # Calculate credited minutes — spam, no_activity, and unresolved are credited back
+            if status in ('spam', 'no_activity', 'unresolved'):
                 if conv.get('started_at') and conv.get('ended_at'):
                     duration_min = _calculate_duration_seconds(conv['started_at'], conv['ended_at']) / 60
                     summary["credited_minutes"] += duration_min

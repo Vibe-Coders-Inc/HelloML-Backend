@@ -21,6 +21,9 @@ class AgentCreate(BaseModel):
     greeting: Optional[str] = "Hello There!"
     goodbye: Optional[str] = "Goodbye and take care!"
     voice_model: Optional[str] = "ash"
+    forwarding_number: Optional[str] = None
+    forwarding_enabled: Optional[bool] = False
+    forwarding_urgency: Optional[str] = 'medium'
 
 
 class AgentUpdate(BaseModel):
@@ -32,6 +35,9 @@ class AgentUpdate(BaseModel):
     goodbye: Optional[str] = None
     status: Optional[str] = None
     voice_model: Optional[str] = None
+    forwarding_number: Optional[str] = None
+    forwarding_enabled: Optional[bool] = None
+    forwarding_urgency: Optional[str] = None
 
 
 async def provision_phone_for_agent(agent_id: int, area_code: str):
@@ -105,6 +111,9 @@ async def create_agent(
             'greeting': agent.greeting,
             'goodbye': agent.goodbye,
             'voice_model': agent.voice_model,
+            'forwarding_number': agent.forwarding_number,
+            'forwarding_enabled': agent.forwarding_enabled,
+            'forwarding_urgency': agent.forwarding_urgency,
             'status': 'active'
         }).execute()
 

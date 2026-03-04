@@ -371,9 +371,12 @@ async def get_usage(
                 duration = max(0, duration)
 
                 resolution = conv.get('resolution_status')
-                if resolution in ('spam', 'no_activity'):
+                if resolution in ('spam', 'no_activity', 'unresolved'):
                     credited_seconds += duration
-                else:
+                elif resolution in ('legitimate', 'resolved', None, 'pending'):
+                    # 'legitimate' is the legacy category (backwards compat)
+                    # 'resolved' is the new billable category
+                    # None/pending default to billable
                     total_seconds += duration
 
         minutes_used = round(total_seconds / 60, 1)

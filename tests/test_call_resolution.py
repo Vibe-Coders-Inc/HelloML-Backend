@@ -152,7 +152,7 @@ class TestClassifyWithAI:
         mock_client.chat.completions.create.return_value = mock_response
 
         result = _classify_with_ai("test", 10.0)
-        assert result.classification == "legitimate"
+        assert result.classification == "resolved"
 
     @patch("api.crud.call_resolution._get_openai_client")
     def test_json_response_format_requested(self, mock_get_client):
@@ -292,7 +292,7 @@ class TestAnalyzeCall:
         }
         db = self._make_db(conv)
         result = await analyze_call(4, db)
-        assert result.classification == "legitimate"
+        assert result.classification == "resolved"
         assert "not completed" in result.reason.lower()
 
     @pytest.mark.asyncio
@@ -314,7 +314,7 @@ class TestAnalyzeCall:
         db = self._make_db(conv, messages)
         result = await analyze_call(5, db)
 
-        assert result.classification == "legitimate"
+        assert result.classification == "resolved"
         assert "failed" in result.reason.lower()
 
 
@@ -331,7 +331,7 @@ class TestResolutionEndpoints:
 
     def test_resolution_result_all_types(self):
         """All resolution types can be created."""
-        for cls in ["spam", "no_activity", "legitimate"]:
+        for cls in ["spam", "no_activity", "resolved", "unresolved", "legitimate"]:
             r = ResolutionResult(classification=cls, reason="test")
             assert r.classification == cls
 
@@ -375,9 +375,9 @@ class TestBillingExcludesCredited:
             duration = max(0, (end - start).total_seconds())
 
             resolution = conv.get('resolution_status')
-            if resolution in ('spam', 'no_activity'):
+            if resolution in ('spam', 'no_activity', 'unresolved'):
                 credited_seconds += duration
-            else:
+            elif resolution in ('legitimate', 'resolved', None, 'pending'):
                 total_seconds += duration
 
         minutes_used = round(total_seconds / 60, 1)
@@ -398,4 +398,5 @@ class TestShortCallThreshold:
     def test_classification_prompt_exists(self):
         assert "spam" in CLASSIFICATION_PROMPT
         assert "no_activity" in CLASSIFICATION_PROMPT
-        assert "legitimate" in CLASSIFICATION_PROMPT
+        assert "resolved" in CLASSIFICATION_PROMPT
+        assert "unresolved" in CLASSIFICATION_PROMPT
