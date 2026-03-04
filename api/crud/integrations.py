@@ -37,7 +37,7 @@ GOOGLE_SCOPES = [
 
 GOOGLE_DRIVE_SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/drive.readonly",
 ]
 
 MS_SCOPES = [
