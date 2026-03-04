@@ -54,7 +54,8 @@ def embed_texts(client, texts):
 
 # sb = supabase client, ai = openai client
 def upsert_document_text(sb, ai, agent_id, filename, text,
-                              storage_url="", file_type="text/plain"):
+                              storage_url="", file_type="text/plain",
+                              source="upload"):
     """
     Adds a new document and its vectorized chunks to the database.
 
@@ -66,12 +67,16 @@ def upsert_document_text(sb, ai, agent_id, filename, text,
     # Check if document already exists for this agent + filename
     existing_doc = sb.table("document").select("id").eq("agent_id", agent_id).eq("filename", filename).execute()
 
+    file_size = len(text.encode('utf-8'))
+
     if existing_doc.data:
         # Update existing document
         doc_id = existing_doc.data[0]["id"]
         sb.table("document").update({
             "storage_url": storage_url,
             "file_type": file_type,
+            "source": source,
+            "file_size": file_size,
             "updated_at": "now()"
         }).eq("id", doc_id).execute()
     else:
@@ -80,7 +85,9 @@ def upsert_document_text(sb, ai, agent_id, filename, text,
             "agent_id": agent_id,
             "filename": filename,
             "storage_url": storage_url,
-            "file_type": file_type
+            "file_type": file_type,
+            "source": source,
+            "file_size": file_size
         }).execute()
 
         if not doc_res.data:

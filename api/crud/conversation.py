@@ -183,6 +183,29 @@ async def end_conversation(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.patch("/{conversation_id}/read", summary="Mark conversation as read/unread")
+async def mark_conversation_read(
+    conversation_id: int,
+    is_read: bool = True,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Toggle read status of a conversation"""
+    try:
+        db = current_user.get_db()
+        result = db.table('conversation').update({
+            'is_read': is_read
+        }).eq('id', conversation_id).execute()
+
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+        return result.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/{conversation_id}", summary="Delete conversation")
 async def delete_conversation(
     conversation_id: int,

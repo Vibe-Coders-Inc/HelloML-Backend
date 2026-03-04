@@ -1051,6 +1051,7 @@ async def index_drive_docs(business_id: int) -> dict:
                 agent_id=agent_id,
                 filename=filename,
                 text=text,
+                source="google-drive",
             )
             indexed += 1
             print(f"[Drive] Indexed: {doc['name']} ({len(text)} chars)")
@@ -1122,7 +1123,7 @@ async def index_drive_files_by_id(
             if not text or len(text.strip()) < 20:
                 continue
             filename = f"drive:{name}"
-            upsert_document_text(sb=sdb, ai=ai, agent_id=agent_id, filename=filename, text=text)
+            upsert_document_text(sb=sdb, ai=ai, agent_id=agent_id, filename=filename, text=text, source="google-drive")
             indexed += 1
             print(f"[Drive] Indexed via Picker: {name} ({len(text)} chars)")
         except Exception as e:

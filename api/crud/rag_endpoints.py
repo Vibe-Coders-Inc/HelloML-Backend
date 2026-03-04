@@ -31,6 +31,7 @@ class TextDocumentIn(BaseModel):
     text: str
     file_type: Optional[str] = "text/plain"
     storage_url: Optional[str] = None
+    source: Optional[str] = "upload"
 
 
 class SearchRequest(BaseModel):
@@ -65,7 +66,8 @@ async def create_text_document(
             filename=body.filename,
             text=body.text,
             file_type=body.file_type or "text/plain",
-            storage_url=body.storage_url or ""
+            storage_url=body.storage_url or "",
+            source=body.source or "upload"
         )
 
         print(f"[RAG] Successfully created document {result['document_id']} with {result['chunks']} chunks")
@@ -122,7 +124,8 @@ async def create_pdf_document(
             filename=final_name,
             text=full_text,
             file_type="application/pdf",
-            storage_url=storage_url or ""
+            storage_url=storage_url or "",
+            source="upload"
         )
 
         print(f"[RAG] Successfully created document {result['document_id']} with {result['chunks']} chunks")
@@ -149,7 +152,7 @@ async def list_documents(
 
         # RLS will filter
         result = db.table("document") \
-            .select("id, filename, file_type, storage_url, uploaded_at") \
+            .select("id, filename, file_type, storage_url, uploaded_at, source, file_size") \
             .eq("agent_id", agent_id) \
             .order("uploaded_at", desc=True) \
             .execute()
@@ -335,7 +338,8 @@ async def index_website(
             filename=filename,
             text=combined_text,
             file_type="text/html",
-            storage_url=url
+            storage_url=url,
+            source="website"
         )
 
         print(f"[RAG-Website] Created document {result['document_id']} with {result['chunks']} chunks")
@@ -353,6 +357,31 @@ async def index_website(
     except Exception as e:
         import traceback
         traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/documents/bulk-delete", summary="Bulk delete documents")
+async def bulk_delete_documents(
+    document_ids: list[int],
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Delete multiple documents at once"""
+    try:
+        db = current_user.get_db()
+        service_db = get_service_client()
+
+        # Verify ownership via RLS
+        existing = db.table("document").select("id").in_("id", document_ids).execute()
+        if len(existing.data) != len(document_ids):
+            raise HTTPException(status_code=404, detail="Some documents not found")
+
+        for doc_id in document_ids:
+            service_db.table("document").delete().eq("id", doc_id).execute()
+
+        return {"success": True, "deleted_count": len(document_ids)}
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
