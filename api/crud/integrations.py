@@ -37,7 +37,7 @@ GOOGLE_SCOPES = [
 
 GOOGLE_DRIVE_SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive.file",
 ]
 
 MS_SCOPES = [
@@ -142,7 +142,7 @@ async def google_callback(
 
     print(f"[Integrations] Google Calendar connected for business {business_id} ({account_email})")
 
-    return RedirectResponse(url=f"{FRONTEND_URL}/business/{business_id}#agent")
+    return RedirectResponse(url=f"{FRONTEND_URL}/business/{business_id}?connected=google-calendar#agent")
 
 
 # ── Google Drive OAuth ───────────────────────────────────────────
@@ -241,7 +241,7 @@ async def google_drive_callback(
     import asyncio
     asyncio.create_task(_index_drive_docs_background(business_id))
 
-    return RedirectResponse(url=f"{FRONTEND_URL}/business/{business_id}#agent")
+    return RedirectResponse(url=f"{FRONTEND_URL}/business/{business_id}?connected=google-drive#agent")
 
 
 # ── Outlook / Microsoft OAuth ────────────────────────────────────
@@ -330,7 +330,7 @@ async def outlook_callback(
 
     print(f"[Integrations] Outlook connected for business {business_id} ({account_email})")
 
-    return RedirectResponse(url=f"{FRONTEND_URL}/business/{business_id}#agent")
+    return RedirectResponse(url=f"{FRONTEND_URL}/business/{business_id}?connected=outlook-calendar#agent")
 
 
 @router.get("/{business_id}/connections", summary="List tool connections")
@@ -1115,6 +1115,19 @@ async def list_drive_folders(
     folders = resp.json().get("files", [])
     # Add a "My Drive (All)" option at the top
     return {"folders": [{"id": "root", "name": "My Drive (All files)"}] + folders}
+
+
+@router.get("/{business_id}/google-drive/files", summary="List indexed Google Drive files")
+async def list_drive_files_endpoint(
+    business_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """List files from Google Drive that have been or can be indexed."""
+    db = current_user.get_db()
+    verify_business_ownership(db, business_id, current_user.id)
+
+    docs = await list_drive_docs(business_id)
+    return {"files": docs}
 
 
 @router.get("/{business_id}/calendars", summary="List available calendars")
