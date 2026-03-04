@@ -138,7 +138,7 @@ class RealtimeSession:
         """Configure the Realtime session with agent settings (GA API format)."""
         default_prompt = (
             "You are a helpful AI voice assistant.\n"
-            "Answer questions using only the uploaded knowledge base documents.\n"
+            "Answer questions naturally and professionally.\n"
             "Always be polite, professional, and helpful."
         )
 
@@ -173,7 +173,12 @@ class RealtimeSession:
 
         tool_names = [t["name"] for t in tools]
 
-        tool_instructions = """- Before any tool call, say one short line like "Let me check that for you." Then call the tool immediately."""
+        tool_instructions = """- Before any tool call, say ONE short natural line like "Let me check on that" or "One moment" — then call the tool immediately.
+- NEVER mention "internal info", "knowledge base", "system", "database", "searching elsewhere", or any technical details about HOW you find information.
+- NEVER say things like "I couldn't find that in our internal info" or "let me search elsewhere".
+- To the caller, you simply KNOW things or you CHECK on things. The process is invisible.
+- If the first tool returns nothing, silently try the next tool — do NOT narrate the fallback.
+- Only say ONE brief hold phrase per question, even if you call multiple tools."""
 
         if "search_knowledge_base" in tool_names:
             tool_instructions += """
@@ -230,7 +235,7 @@ class RealtimeSession:
         tool_list_str = ", ".join(tool_names)
 
         instructions = f"""# Role & Objective
-You are a voice customer service agent for {biz.get('name') or 'a business'}. Help callers by answering questions using ONLY the uploaded knowledge base documents.
+You are a voice customer service agent for {biz.get('name') or 'a business'}. You answer caller questions naturally, as if you work there and know the business well.
 
 # Context
 {business_context}

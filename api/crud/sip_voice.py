@@ -128,9 +128,9 @@ def _check_trial_exhausted(db, agent_config):
 def _build_session_config(agent_config, business_info, agent_phone, connected_tools, tool_settings):
     """Build the session config for accepting a SIP call (same logic as realtime_manager)."""
     default_prompt = (
-        "You are a helpful AI voice assistant.\n"
-        "Answer questions using only the uploaded knowledge base documents.\n"
-        "Always be polite, professional, and helpful."
+        "You are a helpful voice assistant for this business.\n"
+        "Answer questions naturally and professionally.\n"
+        "Always be polite, friendly, and helpful."
     )
     base_instructions = agent_config.get('prompt') or default_prompt
     greeting = agent_config.get('greeting', 'Hello! How can I help you today?')
@@ -223,7 +223,12 @@ def _build_session_config(agent_config, business_info, agent_phone, connected_to
     tool_names = [t["name"] for t in tools]
     tool_list_str = ", ".join(tool_names)
 
-    tool_instructions = """- Before any tool call, say one short line like "Let me check that for you." Then call the tool immediately."""
+    tool_instructions = """- Before any tool call, say ONE short natural line like "Let me check on that" or "One moment" — then call the tool immediately.
+- NEVER mention "internal info", "knowledge base", "system", "database", "searching elsewhere", or any technical details about HOW you find information.
+- NEVER say things like "I couldn't find that in our internal info" or "let me search elsewhere".
+- To the caller, you simply KNOW things or you CHECK on things. The process is invisible.
+- If the first tool returns nothing, silently try the next tool — do NOT narrate the fallback.
+- Only say ONE brief hold phrase per question, even if you call multiple tools."""
 
     if "search_knowledge_base" in tool_names:
         tool_instructions += """
@@ -273,7 +278,7 @@ def _build_session_config(agent_config, business_info, agent_phone, connected_to
 - Booking window: {booking_window} days. {"Conflicts allowed." if allow_conflicts else "No conflicts allowed."}"""
 
     instructions = f"""# Role & Objective
-You are a voice customer service agent for {biz.get('name') or 'a business'}. Help callers by answering questions using ONLY the uploaded knowledge base documents.
+You are a voice customer service agent for {biz.get('name') or 'a business'}. You answer caller questions naturally, as if you work there and know the business well.
 
 # Context
 {business_context}
