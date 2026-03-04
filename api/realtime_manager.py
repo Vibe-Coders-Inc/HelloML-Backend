@@ -11,6 +11,7 @@ import websockets
 from typing import Optional, Dict, Any, Callable, List
 from api.database import get_service_client
 from api.rag import semantic_search
+from api.web_search import search_web
 from openai import OpenAI
 import os
 
@@ -161,6 +162,7 @@ class RealtimeSession:
         # Build tools list and dynamic tool instructions
         tools = [
             self._get_rag_tool_definition(),
+            self._get_web_search_tool_definition(),
             self._get_end_call_tool_definition()
         ]
 
@@ -177,10 +179,19 @@ class RealtimeSession:
             tool_instructions += """
 
 ## search_knowledge_base
-- Call BEFORE answering any factual question.
-- If no results, retry with different search terms (up to 3 attempts).
-- NEVER use your general knowledge or training data - only search results.
-- After 3 failed searches, say you don't have that information."""
+- Call BEFORE answering any factual question about the business.
+- If no results, retry with different search terms (up to 2 attempts).
+- If still no results after retries, use search_web as a fallback.
+- NEVER use your general knowledge or training data - only tool results."""
+
+        if "search_web" in tool_names:
+            tool_instructions += """
+
+## search_web
+- Use as a FALLBACK when search_knowledge_base returns no results.
+- Also use for questions about the industry, competitors, current events, or anything beyond the knowledge base.
+- Be specific in your query - include the business name or relevant context.
+- Summarize the web results conversationally - don't read URLs or raw text."""
 
         if "end_call" in tool_names:
             tool_instructions += f"""
@@ -262,9 +273,9 @@ Sample clarification phrases:
 {tool_instructions}
 
 # Instructions
-- NEVER answer factual questions without calling search_knowledge_base first.
+- NEVER answer factual questions without searching first (knowledge base, then web).
 - Keep responses concise - this is a phone call, not an essay.
-- If you don't know, say so. Do not make up answers.
+- If neither search_knowledge_base nor search_web has an answer, say you don't have that information.
 
 {base_instructions}"""
 
@@ -318,6 +329,24 @@ Sample clarification phrases:
                     "query": {
                         "type": "string",
                         "description": "Natural language search query to match against document content"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+
+    def _get_web_search_tool_definition(self) -> Dict[str, Any]:
+        """Return the function tool definition for live web search."""
+        return {
+            "type": "function",
+            "name": "search_web",
+            "description": "Search the web for information when the knowledge base doesn't have the answer. Use for current info, competitor comparisons, industry questions, or anything not in the knowledge base.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query - be specific and include the business name or context"
                     }
                 },
                 "required": ["query"]
@@ -621,6 +650,11 @@ Sample clarification phrases:
                 query = args.get("query", "")
                 k = args.get("k", 5)
                 result = await self._execute_rag_search(query, k)
+
+            elif function_name == "search_web":
+                query = args.get("query", "")
+                print(f"[RT Function] Web search: {query}", flush=True)
+                result = await search_web(query, max_results=5, search_depth="basic")
 
             elif function_name == "end_call":
                 reason = args.get("reason", "Conversation completed")

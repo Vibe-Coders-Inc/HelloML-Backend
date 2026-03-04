@@ -16,6 +16,7 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 from api.database import get_service_client
 from api.rag import semantic_search
+from api.web_search import search_web
 from openai import OpenAI, InvalidWebhookSignatureError
 import websockets
 import requests as http_requests
@@ -165,6 +166,18 @@ def _build_session_config(agent_config, business_info, agent_phone, connected_to
         },
         {
             "type": "function",
+            "name": "search_web",
+            "description": "Search the web for information when the knowledge base doesn't have the answer. Use for current info, competitor comparisons, industry questions, or anything not in the knowledge base.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query - be specific and include the business name or context"}
+                },
+                "required": ["query"]
+            }
+        },
+        {
+            "type": "function",
             "name": "end_call",
             "description": "Terminate the active phone call.",
             "parameters": {
@@ -216,10 +229,19 @@ def _build_session_config(agent_config, business_info, agent_phone, connected_to
         tool_instructions += """
 
 ## search_knowledge_base
-- Call BEFORE answering any factual question.
-- If no results, retry with different search terms (up to 3 attempts).
-- NEVER use your general knowledge or training data - only search results.
-- After 3 failed searches, say you don't have that information."""
+- Call BEFORE answering any factual question about the business.
+- If no results, retry with different search terms (up to 2 attempts).
+- If still no results after retries, use search_web as a fallback.
+- NEVER use your general knowledge or training data - only tool results."""
+
+    if "search_web" in tool_names:
+        tool_instructions += """
+
+## search_web
+- Use as a FALLBACK when search_knowledge_base returns no results.
+- Also use for questions about the industry, competitors, current events, or anything beyond the knowledge base.
+- Be specific in your query - include the business name or relevant context.
+- Summarize the web results conversationally - don't read URLs or raw text."""
 
     if "end_call" in tool_names:
         tool_instructions += f"""
@@ -277,9 +299,9 @@ When you see "[Call connected]", say exactly: "{greeting}"
 {tool_instructions}
 
 # Instructions
-- NEVER answer factual questions without calling search_knowledge_base first.
+- NEVER answer factual questions without searching first (knowledge base, then web).
 - Keep responses concise - this is a phone call.
-- If you don't know, say so.
+- If neither search_knowledge_base nor search_web has an answer, say you don't have that information.
 
 {base_instructions}"""
 
@@ -478,6 +500,11 @@ async def _handle_function_call(ws, item, agent_id, conversation_id, business_id
                 }
             else:
                 result = {"found": False, "message": "No relevant information found in knowledge base."}
+
+        elif function_name == "search_web":
+            query = args.get("query", "")
+            print(f"[SIP Function] Web search: {query}", flush=True)
+            result = await search_web(query, max_results=5, search_depth="basic")
 
         elif function_name == "end_call":
             reason = args.get("reason", "Conversation completed")
