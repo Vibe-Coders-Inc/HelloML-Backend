@@ -15,6 +15,8 @@ def should_transfer(agent_data: dict, business_data: dict) -> tuple[bool, str]:
         return False, "Call forwarding is not enabled"
     if not agent_data.get('forwarding_number'):
         return False, "No forwarding number configured"
+    if not agent_data.get('forwarding_verified'):
+        return False, "Forwarding number has not been verified"
 
     # Check business hours
     tz_name = business_data.get('business_timezone', 'America/Los_Angeles')

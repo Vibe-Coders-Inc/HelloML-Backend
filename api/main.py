@@ -24,6 +24,7 @@ from .crud.demo import router as demo_router
 from .crud.sip_voice import router as sip_router
 from .crud.call_resolution import router as resolution_router
 from .crud.website_extract import router as extract_router
+from .crud.forwarding_verify import router as forwarding_verify_router
 from api import __version__
 
 
@@ -157,6 +158,7 @@ _app.include_router(demo_router)
 _app.include_router(sip_router)
 _app.include_router(resolution_router)
 _app.include_router(extract_router)
+_app.include_router(forwarding_verify_router)
 
 
 @_app.get("/", summary="API status")

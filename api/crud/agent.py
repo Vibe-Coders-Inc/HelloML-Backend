@@ -24,6 +24,7 @@ class AgentCreate(BaseModel):
     forwarding_number: Optional[str] = None
     forwarding_enabled: Optional[bool] = False
     forwarding_urgency: Optional[str] = 'medium'
+    forwarding_verified: Optional[bool] = False
 
 
 class AgentUpdate(BaseModel):
@@ -114,6 +115,7 @@ async def create_agent(
             'forwarding_number': agent.forwarding_number,
             'forwarding_enabled': agent.forwarding_enabled,
             'forwarding_urgency': agent.forwarding_urgency,
+            'forwarding_verified': agent.forwarding_verified,
             'status': 'active'
         }).execute()
 
@@ -209,6 +211,16 @@ async def update_agent(
 
         if 'prompt' in update_data and (update_data['prompt'] is None or update_data['prompt'].strip() == ''):
             print(f"[WARNING] Agent {agent_id}: Prompt set to empty.")
+
+        # Reset forwarding_verified when forwarding_number changes
+        if 'forwarding_number' in update_data:
+            # Check if number actually changed
+            current = db.table('agent').select('forwarding_number').eq('id', agent_id).execute()
+            if current.data:
+                old_number = current.data[0].get('forwarding_number', '')
+                if update_data['forwarding_number'] != old_number:
+                    update_data['forwarding_verified'] = False
+                    print(f"[Agent Update] Agent {agent_id}: Forwarding number changed, resetting verification")
 
         print(f"[Agent Update] Agent {agent_id}: Updating fields: {list(update_data.keys())}")
 
