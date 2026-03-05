@@ -18,7 +18,7 @@ _verification_codes: dict[str, dict] = {}
 
 
 class SendCodeRequest(BaseModel):
-    method: Literal["sms", "call"]
+    method: Literal["call"] = "call"
 
 
 class VerifyCodeRequest(BaseModel):
@@ -98,26 +98,19 @@ async def send_verification_code(
             raise HTTPException(status_code=500, detail="No Twilio phone number available to send from")
 
     try:
-        if request.method == "sms":
-            twilio_client.messages.create(
-                body=f"Your HelloML verification code is: {code}",
-                from_=from_number,
-                to=cleaned,
-            )
-        else:
-            # Voice call with TwiML
-            twiml = f'<Response><Say voice="alice">Your HelloML verification code is: {" ".join(code)}. Again, your code is: {" ".join(code)}.</Say></Response>'
-            twilio_client.calls.create(
-                twiml=twiml,
-                from_=from_number,
-                to=cleaned,
-            )
+        # Voice call with TwiML (call-only — SMS blocked by carrier A2P compliance)
+        twiml = f'<Response><Say voice="alice">Your HelloML verification code is: {" ".join(code)}. Again, your code is: {" ".join(code)}.</Say></Response>'
+        twilio_client.calls.create(
+            twiml=twiml,
+            from_=from_number,
+            to=cleaned,
+        )
     except Exception as e:
         print(f"[Forwarding Verify] Twilio error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to send verification: {str(e)}")
 
-    print(f"[Forwarding Verify] Sent {request.method} code to {cleaned} for business {business_id}")
-    return {"success": True, "method": request.method}
+    print(f"[Forwarding Verify] Sent verification call to {cleaned} for business {business_id}")
+    return {"success": True, "method": "call"}
 
 
 @router.post("/{business_id}/forwarding/verify-code", summary="Verify forwarding code")
