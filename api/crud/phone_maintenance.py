@@ -27,53 +27,50 @@ async def send_warning_email(to_email: str, phone_number: str, business_name: st
         return False
 
     html_content = f"""
-    <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-      <div style="text-align: center; margin-bottom: 30px;">
-        <h1 style="color: #8B6F47; margin: 0;">HelloML</h1>
-      </div>
-
-      <div style="background: #FEF3C7; border: 1px solid #F59E0B; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
-        <h2 style="color: #92400E; margin: 0 0 10px 0; font-size: 18px;">⚠️ Phone Number Inactivity Warning</h2>
-        <p style="color: #92400E; margin: 0;">Your phone number will be released in 3 days due to inactivity.</p>
-      </div>
-
-      <p style="color: #374151; line-height: 1.6;">
-        Hi there,
-      </p>
-
-      <p style="color: #374151; line-height: 1.6;">
-        Your phone number <strong style="color: #8B6F47;">{phone_number}</strong> for
-        <strong>{business_name}</strong> hasn't received any calls in the past 11 days.
-      </p>
-
-      <p style="color: #374151; line-height: 1.6;">
-        To help manage resources, we automatically release phone numbers that don't receive calls
-        for 14 days. <strong>Your number will be released in 3 days</strong> unless it receives a call.
-      </p>
-
-      <div style="background: #F5F0E8; border-radius: 8px; padding: 20px; margin: 20px 0;">
-        <p style="color: #5D4E37; margin: 0 0 10px 0; font-weight: 600;">To keep your number:</p>
-        <ul style="color: #5D4E37; margin: 0; padding-left: 20px;">
-          <li>Make a test call to your agent</li>
-          <li>Or simply ensure the number receives at least one call</li>
-        </ul>
-      </div>
-
-      <p style="color: #374151; line-height: 1.6;">
-        If your number is released, you can always provision a new one from your dashboard
-        (though it may be a different number).
-      </p>
-
-      <p style="color: #6B7280; font-size: 14px; margin-top: 30px;">
-        — The HelloML Team
-      </p>
-
-      <div style="border-top: 1px solid #E5E7EB; margin-top: 30px; padding-top: 20px; text-align: center;">
-        <p style="color: #9CA3AF; font-size: 12px; margin: 0;">
-          This is an automated message from HelloML. If you have questions, reply to this email.
-        </p>
-      </div>
-    </div>
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin: 0; padding: 0; background-color: #FAF6F0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #FAF6F0;">
+        <tr><td align="center" style="padding: 40px 20px;">
+          <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width: 560px; width: 100%; background-color: #FFFFFF; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(93, 78, 55, 0.08);">
+            <tr><td style="padding: 32px 40px 24px; text-align: center; border-bottom: 1px solid #F5F0E8;">
+              <span style="font-size: 24px; font-weight: 700; color: #5D4E37; letter-spacing: -0.5px;">HelloML</span>
+            </td></tr>
+            <tr><td style="padding: 32px 40px;">
+              <h1 style="margin: 0 0 16px; font-size: 20px; font-weight: 600; color: #3D2E1F;">Phone Number Inactivity Notice</h1>
+              <p style="margin: 0 0 16px; font-size: 15px; line-height: 1.6; color: #5D4E37;">
+                Your phone number <strong style="color: #8B6F47;">{phone_number}</strong> for
+                <strong>{business_name}</strong> has not received any calls in the past 11 days.
+              </p>
+              <p style="margin: 0 0 16px; font-size: 15px; line-height: 1.6; color: #5D4E37;">
+                To help manage resources, we automatically release phone numbers that do not receive calls
+                for 14 days. <strong>Your number will be released in 3 days</strong> unless it receives a call.
+              </p>
+              <div style="background: #F5F0E8; border-radius: 8px; padding: 20px; margin: 24px 0;">
+                <p style="color: #5D4E37; margin: 0 0 10px; font-weight: 600; font-size: 15px;">To keep your number:</p>
+                <ul style="color: #5D4E37; margin: 0; padding-left: 20px; font-size: 15px; line-height: 1.6;">
+                  <li>Make a test call to your agent</li>
+                  <li>Or ensure the number receives at least one call</li>
+                </ul>
+              </div>
+              <p style="margin: 0 0 24px; font-size: 15px; line-height: 1.6; color: #5D4E37;">
+                If your number is released, you can provision a new one from your dashboard (though it may be a different number).
+              </p>
+              <table role="presentation" cellpadding="0" cellspacing="0" style="margin: 0 auto;">
+                <tr><td style="border-radius: 8px; background-color: #8B6F47;">
+                  <a href="https://helloml.app/dashboard" target="_blank" style="display: inline-block; padding: 12px 28px; font-size: 15px; font-weight: 600; color: #FFFFFF; text-decoration: none;">Go to Dashboard</a>
+                </td></tr>
+              </table>
+            </td></tr>
+            <tr><td style="padding: 24px 40px; text-align: center; border-top: 1px solid #F5F0E8;">
+              <p style="margin: 0; font-size: 12px; color: #A67A5B;">HelloML. This is an automated message.</p>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </body>
+    </html>
     """
 
     try:
@@ -87,7 +84,7 @@ async def send_warning_email(to_email: str, phone_number: str, business_name: st
                 json={
                     "from": "HelloML <support@helloml.app>",
                     "to": [to_email],
-                    "subject": f"⚠️ Your phone number {phone_number} will be released in 3 days",
+                    "subject": f"Your phone number {phone_number} will be released in 3 days",
                     "html": html_content,
                 },
             )
