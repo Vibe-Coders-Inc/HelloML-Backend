@@ -26,52 +26,87 @@ async def send_warning_email(to_email: str, phone_number: str, business_name: st
         logger.warning("RESEND_API_KEY not configured, skipping email")
         return False
 
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-    <body style="margin: 0; padding: 0; background-color: #FAF6F0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #FAF6F0;">
-        <tr><td align="center" style="padding: 40px 20px;">
-          <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width: 560px; width: 100%; background-color: #FFFFFF; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(93, 78, 55, 0.08);">
-            <tr><td style="padding: 32px 40px 24px; text-align: center; border-bottom: 1px solid #F5F0E8;">
-              <span style="font-size: 24px; font-weight: 700; color: #5D4E37; letter-spacing: -0.5px;">HelloML</span>
-            </td></tr>
-            <tr><td style="padding: 32px 40px;">
-              <h1 style="margin: 0 0 16px; font-size: 20px; font-weight: 600; color: #3D2E1F;">Phone Number Inactivity Notice</h1>
-              <p style="margin: 0 0 16px; font-size: 15px; line-height: 1.6; color: #5D4E37;">
-                Your phone number <strong style="color: #8B6F47;">{phone_number}</strong> for
-                <strong>{business_name}</strong> has not received any calls in the past 11 days.
-              </p>
-              <p style="margin: 0 0 16px; font-size: 15px; line-height: 1.6; color: #5D4E37;">
-                To help manage resources, we automatically release phone numbers that do not receive calls
-                for 14 days. <strong>Your number will be released in 3 days</strong> unless it receives a call.
-              </p>
-              <div style="background: #F5F0E8; border-radius: 8px; padding: 20px; margin: 24px 0;">
-                <p style="color: #5D4E37; margin: 0 0 10px; font-weight: 600; font-size: 15px;">To keep your number:</p>
-                <ul style="color: #5D4E37; margin: 0; padding-left: 20px; font-size: 15px; line-height: 1.6;">
-                  <li>Make a test call to your agent</li>
-                  <li>Or ensure the number receives at least one call</li>
-                </ul>
-              </div>
-              <p style="margin: 0 0 24px; font-size: 15px; line-height: 1.6; color: #5D4E37;">
-                If your number is released, you can provision a new one from your dashboard (though it may be a different number).
-              </p>
-              <table role="presentation" cellpadding="0" cellspacing="0" style="margin: 0 auto;">
-                <tr><td style="border-radius: 8px; background-color: #8B6F47;">
-                  <a href="https://helloml.app/dashboard" target="_blank" style="display: inline-block; padding: 12px 28px; font-size: 15px; font-weight: 600; color: #FFFFFF; text-decoration: none;">Go to Dashboard</a>
-                </td></tr>
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light">
+  <style>
+    @media only screen and (max-width: 600px) {{
+      .card {{ padding: 32px 24px !important; }}
+    }}
+  </style>
+</head>
+<body style="margin: 0; padding: 0; background-color: #FAF6F0; -webkit-font-smoothing: antialiased; width: 100%; height: 100%;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" height="100%" style="background-color: #FAF6F0; min-height: 100vh;">
+    <tr>
+      <td align="center" valign="top" style="padding: 48px 20px 48px 20px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="480" style="max-width: 480px; width: 100%;">
+          <tr>
+            <td align="center" style="padding-bottom: 32px;">
+              <a href="https://helloml.app" target="_blank" style="text-decoration: none;">
+                <img src="https://helloml.app/email-logo.png" alt="HelloML" width="160" style="display: block; border: 0; max-width: 160px; height: auto;" />
+              </a>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color: #ffffff; border-radius: 16px; border: 1px solid #EDE6DA;" class="card">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td style="padding: 40px 36px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                      <tr>
+                        <td style="padding-bottom: 16px;">
+                          <h1 style="margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 22px; font-weight: 700; color: #3D2E1F; line-height: 1.3;">
+                            Phone number inactivity notice
+                          </h1>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #6B5D4D; line-height: 1.65;">
+                          <p style="margin: 0;">Your phone number <strong style="color: #8B6F47;">{phone_number}</strong> for <strong>{business_name}</strong> has not received any calls in the past 11 days.</p>
+                          <p style="margin: 14px 0 0 0;">We automatically release numbers that are inactive for 14 days. <strong>Your number will be released in 3 days</strong> unless it receives a call.</p>
+                          <p style="margin: 14px 0 0 0;">To keep it, make a test call to your agent or ensure it receives at least one call. If released, you can provision a new number from your dashboard.</p>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td align="center" style="padding: 28px 0 0 0;">
+                          <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                            <tr>
+                              <td align="center" style="border-radius: 8px; background-color: #8B6F47;">
+                                <a href="https://helloml.app/dashboard" target="_blank" style="display: inline-block; padding: 14px 40px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; font-weight: 600; color: #ffffff; text-decoration: none; border-radius: 8px;">
+                                  Go to Dashboard
+                                </a>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding-top: 28px;">
+                          <p style="margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 13px; color: #C4A882; line-height: 1.5;">
+                            This is an automated message. If you have questions, contact support.
+                          </p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
               </table>
-            </td></tr>
-            <tr><td style="padding: 24px 40px; text-align: center; border-top: 1px solid #F5F0E8;">
-              <p style="margin: 0; font-size: 12px; color: #A67A5B;">HelloML. This is an automated message.</p>
-            </td></tr>
-          </table>
-        </td></tr>
-      </table>
-    </body>
-    </html>
-    """
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding: 24px 0 0 0;">
+              <a href="https://helloml.app" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 12px; color: #8B7355; text-decoration: none; font-weight: 500;">helloml.app</a>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
 
     try:
         async with httpx.AsyncClient() as client:
